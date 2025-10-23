@@ -1,0 +1,192 @@
+Projet : Application d’envoi et de réception de colis entre particuliers
+1️⃣ Objectif du projet
+
+L’application a pour objectif de mettre en relation des voyageurs se déplaçant entre différentes destinations et des expéditeurs souhaitant envoyer des colis de manière rapide, économique et sécurisée.
+
+Le principe est simple :
+
+Les voyageurs publient leurs trajets (ville de départ, destination, dates, poids disponible, etc.).
+
+Les expéditeurs recherchent un trajet compatible et réservent un espace pour envoyer leur colis.
+
+L’ensemble du processus — de la réservation au suivi de livraison — doit être mobile first, fluide et 100 % responsive, afin d’offrir une expérience utilisateur optimale sur smartphone, tablette et ordinateur.
+
+2️⃣ Expérience utilisateur (UX globale)
+📱 Mobile First et Responsive
+
+L’interface doit être conçue en priorité pour les mobiles (smartphones).
+
+Le design doit s’adapter parfaitement à tous les écrans : tablettes et ordinateurs inclus.
+
+Les éléments d’action (boutons, formulaires, cartes, menus) doivent être ergonomiques pour une utilisation tactile.
+
+Les pages principales (recherche, réservation, profil, messagerie, paiement) doivent s’afficher en moins de 2 secondes sur mobile.
+
+3️⃣ Fonctionnalités principales (MVP)
+👤 Gestion des comptes utilisateurs
+
+Création de compte par numéro de téléphone, email ou réseaux sociaux.
+
+Vérification d’identité (KYC léger) pour renforcer la sécurité.
+
+Gestion des rôles : Voyageur, Expéditeur, ou les deux.
+
+Profil utilisateur avec photo, note moyenne, historique des transactions, et avis reçus.
+
+🚗 Publication de trajet (Voyageur)
+
+Le voyageur publie un trajet :
+
+Ville de départ et destination
+
+Dates de départ et d’arrivée
+
+Poids disponible (en kg)
+
+Prix par kg (ou montant total)
+
+Détails supplémentaires (dimensions max, objets acceptés, etc.)
+
+Il peut modifier ou annuler un trajet avant confirmation.
+
+📦 Réservation de colis (Expéditeur)
+
+Recherche de trajets disponibles selon :
+
+Destination, ville de départ, date, poids ou budget.
+
+Affichage d’une liste responsive de voyageurs avec notation et prix.
+
+Réservation et paiement en ligne (fonds bloqués jusqu’à la livraison).
+
+Confirmation par code PIN ou QR code au moment de la remise.
+
+💸 Paiement et sécurité
+
+Système de paiement sécurisé avec escrow (compte de consignation) :
+
+L’expéditeur paie au moment de la réservation.
+
+Les fonds sont bloqués jusqu’à la livraison confirmée.
+
+Le voyageur reçoit le paiement après validation de la remise du colis.
+
+Reçus automatiques, notifications et historique des paiements.
+
+📲 Suivi en temps réel
+
+Suivi par étapes :
+
+Colis déposé
+
+En transit
+
+Arrivé à destination
+
+Livré
+
+Possibilité d’ajouter des photos ou signatures numériques à chaque étape.
+
+Notifications push ou email à chaque changement d’état.
+
+⭐ Notes et avis
+
+Après chaque transaction, expéditeur et voyageur peuvent s’évaluer mutuellement.
+
+Système de notation (étoiles + commentaire).
+
+Classement ou badge de fiabilité pour les utilisateurs réguliers.
+
+⚠️ Gestion des litiges
+
+Option “Ouvrir un litige” disponible en cas de problème.
+
+Suspension automatique du paiement le temps d’une résolution.
+
+Interface simple pour ajouter preuves (photo, texte, horodatage).
+
+4️⃣ Sécurité, fiabilité et conformité
+🔐 Vérification d’identité
+
+Vérification d’identité selon le type d’utilisateur ou la valeur du colis.
+
+Niveau 1 : téléphone ou email vérifié.
+
+Niveau 2 : document officiel et selfie (si poids/valeur élevés).
+
+💳 Paiement sécurisé (escrow)
+
+Les paiements sont collectés, conservés temporairement, puis libérés au moment de la confirmation de livraison.
+
+Aucun paiement direct entre particuliers n’est permis.
+
+Remboursement automatique possible en cas d’annulation avant remise.
+
+📜 Conformité & politique
+
+Politique claire sur les objets interdits (armes, produits périssables, produits inflammables, médicaments, etc.).
+
+Respect de la législation locale en matière de transport et de douane.
+
+Protection des données (RGPD, LPRPDE).
+
+Chiffrement complet des données sensibles (mots de passe, documents, transactions).
+
+🧾 Journalisation & traçabilité
+
+Toutes les étapes critiques (remise, paiement, litige, livraison) doivent être enregistrées avec date, heure et utilisateur.
+
+Historique consultable dans le tableau de bord personnel.
+
+5️⃣ Interface et ergonomie
+🎨 Design général
+
+Interface claire, moderne et minimaliste.
+
+Palette neutre et contrastée pour une bonne lisibilité.
+
+Composants cohérents : boutons, icônes, formulaires, alertes, etc.
+
+Navigation simple à 3 niveaux :
+
+Accueil / Recherche
+
+Messagerie / Notifications
+
+Profil / Tableau de bord
+
+🧭 Écrans prioritaires (pour le MVP)
+
+Page d’accueil / Recherche de trajets
+
+Publication de trajet (formulaire dynamique)
+
+Résultats de recherche (liste + carte optionnelle)
+
+Détails du trajet / Profil du voyageur
+
+Réservation et paiement
+
+Suivi du colis (étapes et photos)
+
+Confirmation de livraison (code PIN ou QR)
+
+Historique et avis
+
+Messagerie intégrée
+
+Tableau de bord utilisateur
+
+6️⃣ Modèle économique
+
+Les voyageurs fixent leur propre tarif par kilogramme ou par colis.
+
+L’application perçoit une commission sur chaque transaction (ex. 10–15 %).
+
+Frais fixes additionnels possibles pour :
+
+Assurance colis (optionnelle)
+
+Promotion de l’annonce (“mise en avant”)
+
+Service premium (collecte à domicile ou livraison express)

@@ -22,10 +22,20 @@ import { isUnauthorizedError } from "@/lib/authUtils";
 import { useLocation } from "wouter";
 import { insertTripSchema } from "@shared/schema";
 
-const formSchema = insertTripSchema.extend({
-  departureDate: z.string().min(1, "Departure date is required"),
-  arrivalDate: z.string().min(1, "Arrival date is required"),
-});
+const formSchema = insertTripSchema
+  .omit({
+    travelerId: true,
+    departureDate: true,
+    arrivalDate: true,
+    availableWeight: true,
+    pricePerKg: true,
+  })
+  .extend({
+    departureDate: z.string().min(1, "Departure date is required"),
+    arrivalDate: z.string().min(1, "Arrival date is required"),
+    availableWeight: z.string().min(1, "Available weight is required"),
+    pricePerKg: z.string().min(1, "Price per kg is required"),
+  });
 
 type FormData = z.infer<typeof formSchema>;
 
@@ -51,9 +61,15 @@ export default function CreateTrip() {
   const createTripMutation = useMutation({
     mutationFn: async (data: FormData) => {
       const tripData = {
-        ...data,
+        departureCity: data.departureCity,
+        destinationCity: data.destinationCity,
         departureDate: new Date(data.departureDate).toISOString(),
         arrivalDate: new Date(data.arrivalDate).toISOString(),
+        availableWeight: data.availableWeight,
+        pricePerKg: data.pricePerKg,
+        maxDimensions: data.maxDimensions || null,
+        acceptedItems: data.acceptedItems || null,
+        restrictedItems: data.restrictedItems || null,
       };
       return await apiRequest("POST", "/api/trips", tripData);
     },

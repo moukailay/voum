@@ -10,6 +10,17 @@ import {
 } from "@shared/schema";
 import { z } from "zod";
 
+// Create API schemas that accept date strings
+const createTripSchema = insertTripSchema
+  .omit({
+    departureDate: true,
+    arrivalDate: true,
+  })
+  .extend({
+    departureDate: z.string().transform((val) => new Date(val)),
+    arrivalDate: z.string().transform((val) => new Date(val)),
+  });
+
 // WebSocket client tracking
 interface WSClient {
   ws: WebSocket;
@@ -38,7 +49,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.post("/api/trips", isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
-      const validatedData = insertTripSchema.parse({
+      const validatedData = createTripSchema.parse({
         ...req.body,
         travelerId: userId,
       });

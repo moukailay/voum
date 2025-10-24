@@ -51,7 +51,7 @@ function broadcastUserStatus(userId: string, status: "online" | "offline") {
   };
 
   // Broadcast to all connected clients
-  for (const [_, client] of clients.entries()) {
+  for (const [, client] of Array.from(clients.entries())) {
     if (client.ws.readyState === WebSocket.OPEN) {
       client.ws.send(JSON.stringify(statusMessage));
     }
@@ -615,8 +615,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         messageId,
         reporterId,
         category: category as any,
-        details: details || null,
-        status: "pending",
+        description: details || null,
       });
 
       // Create notification for admins (in a real app, this would notify moderators)

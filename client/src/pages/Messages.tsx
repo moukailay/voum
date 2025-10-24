@@ -1,15 +1,18 @@
 import { useState, useEffect, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Send, MessageCircle, Star, ArrowLeft, Paperclip, ChevronDown, ChevronUp, Package, MapPin, Calendar, Weight } from "lucide-react";
+import { Send, MessageCircle, Star, ArrowLeft, Paperclip, ChevronDown, ChevronUp, Package, MapPin, Calendar, Weight, X, FileText, Image as ImageIcon } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
+import { ObjectUploader } from "@/components/ObjectUploader";
 import { useAuth } from "@/hooks/useAuth";
+import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import type { Message, User } from "@shared/schema";
 import { format } from "date-fns";
+import type { UploadResult } from "@uppy/core";
 
 interface MessageWithUsers extends Message {
   sender?: User;
@@ -33,8 +36,18 @@ interface OnlineStatus {
   [userId: string]: boolean;
 }
 
+interface AttachedFile {
+  id: string;
+  name: string;
+  type: string;
+  size: number;
+  url: string;
+  thumbnailUrl?: string;
+}
+
 export default function Messages() {
   const { user } = useAuth();
+  const { toast } = useToast();
   const [selectedConversation, setSelectedConversation] = useState<string | null>(null);
   const [messageInput, setMessageInput] = useState("");
   const [messages, setMessages] = useState<MessageWithUsers[]>([]);
@@ -42,6 +55,7 @@ export default function Messages() {
   const [typingUsers, setTypingUsers] = useState<TypingUser[]>([]);
   const [onlineUsers, setOnlineUsers] = useState<OnlineStatus>({});
   const [isTripDetailsOpen, setIsTripDetailsOpen] = useState(false);
+  const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -236,14 +250,14 @@ export default function Messages() {
   };
 
   const sendMessage = () => {
-    if (!messageInput.trim() || !selectedConversation || !wsRef.current) return;
+    if ((!messageInput.trim() && attachedFiles.length === 0) || !selectedConversation || !wsRef.current) return;
 
     const tempId = `temp-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
     const tempMessage: MessageWithUsers = {
       id: tempId,
       senderId: user!.id,
       receiverId: selectedConversation,
-      content: messageInput.trim(),
+      content: messageInput.trim() || "(Fichier joint)",
       status: "sending",
       createdAt: new Date(),
       bookingId: null,
@@ -262,17 +276,97 @@ export default function Messages() {
     const messageData = {
       type: "send_message",
       receiverId: selectedConversation,
-      content: messageInput.trim(),
+      content: messageInput.trim() || "(Fichier joint)",
       clientMessageId: tempId,
+      attachments: attachedFiles.map(f => ({ url: f.url, name: f.name, type: f.type, size: f.size })),
     };
 
     wsRef.current.send(JSON.stringify(messageData));
     setMessageInput("");
+    setAttachedFiles([]);
     setIsTyping(false);
 
     if (typingTimeoutRef.current) {
       clearTimeout(typingTimeoutRef.current);
     }
+  };
+
+  // Get presigned URL for file upload
+  const getUploadParameters = async () => {
+    const response = await fetch("/api/object-storage/presigned-url", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+    });
+
+    if (!response.ok) {
+      throw new Error("Échec de l'obtention de l'URL de téléversement");
+    }
+
+    const data = await response.json();
+    return {
+      method: "PUT" as const,
+      url: data.url,
+    };
+  };
+
+  // Handle file upload completion
+  const handleUploadComplete = (result: UploadResult<Record<string, unknown>, Record<string, unknown>>) => {
+    const successful = result.successful || [];
+    
+    if (successful.length === 0) {
+      toast({
+        title: "Erreur",
+        description: "Aucun fichier n'a été téléversé",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    // Calculate remaining slots
+    const remainingSlots = 3 - attachedFiles.length;
+    if (remainingSlots <= 0) {
+      toast({
+        title: "Limite atteinte",
+        description: "Vous ne pouvez joindre que 3 fichiers maximum",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    // Take only what fits in remaining slots
+    const filesToAdd = successful.slice(0, remainingSlots);
+    const newFiles: AttachedFile[] = filesToAdd.map((file: any) => ({
+      id: file.id || `file-${Date.now()}`,
+      name: file.name,
+      type: file.type || "application/octet-stream",
+      size: file.size || 0,
+      url: file.uploadURL || "",
+      thumbnailUrl: file.type?.startsWith("image/") ? file.uploadURL : undefined,
+    }));
+
+    setAttachedFiles((prev) => [...prev, ...newFiles]);
+    
+    const addedCount = newFiles.length;
+    const droppedCount = successful.length - addedCount;
+    
+    if (droppedCount > 0) {
+      toast({
+        title: "Limite atteinte",
+        description: `${addedCount} fichier(s) ajouté(s). ${droppedCount} fichier(s) ignoré(s) (max 3 fichiers)`,
+        variant: "destructive",
+      });
+    } else {
+      toast({
+        title: "Succès",
+        description: `${addedCount} fichier(s) joint(s)`,
+      });
+    }
+  };
+
+  // Remove attached file
+  const removeAttachedFile = (fileId: string) => {
+    setAttachedFiles((prev) => prev.filter((f) => f.id !== fileId));
   };
 
   // Send read receipt when messages are viewed
@@ -545,41 +639,95 @@ export default function Messages() {
                 </div>
 
                 {/* Message Input - Sticky compose bar with 44px+ tap targets */}
-                <div className="p-3 border-t border-card-border bg-background sticky bottom-0">
-                  <div className="flex gap-2 items-end">
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="min-h-[44px] min-w-[44px] shrink-0"
-                      data-testid="button-attach-file"
-                    >
-                      <Paperclip className="h-5 w-5" />
-                    </Button>
-                    <Input
-                      placeholder="Type a message..."
-                      value={messageInput}
-                      onChange={(e) => {
-                        setMessageInput(e.target.value);
-                        handleTyping();
-                      }}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" && !e.shiftKey) {
-                          e.preventDefault();
-                          sendMessage();
-                        }
-                      }}
-                      className="min-h-[44px]"
-                      data-testid="input-message"
-                    />
-                    <Button
-                      size="icon"
-                      onClick={sendMessage}
-                      disabled={!messageInput.trim()}
-                      className="min-h-[44px] min-w-[44px] shrink-0"
-                      data-testid="button-send-message"
-                    >
-                      <Send className="h-5 w-5" />
-                    </Button>
+                <div className="border-t border-card-border bg-background sticky bottom-0">
+                  {/* Attached files preview */}
+                  {attachedFiles.length > 0 && (
+                    <div className="p-3 border-b border-card-border">
+                      <div className="flex flex-wrap gap-2">
+                        {attachedFiles.map((file) => (
+                          <div
+                            key={file.id}
+                            className="relative group rounded-md border border-card-border p-2 flex items-center gap-2 bg-card"
+                          >
+                            {file.type.startsWith("image/") ? (
+                              <ImageIcon className="h-4 w-4 text-muted-foreground shrink-0" />
+                            ) : (
+                              <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
+                            )}
+                            <div className="flex-1 min-w-0">
+                              <p className="text-xs font-medium truncate max-w-[120px]">
+                                {file.name}
+                              </p>
+                              <p className="text-xs text-muted-foreground">
+                                {(file.size / 1024).toFixed(1)} KB
+                              </p>
+                            </div>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              className="h-6 w-6 shrink-0"
+                              onClick={() => removeAttachedFile(file.id)}
+                              data-testid={`button-remove-file-${file.id}`}
+                            >
+                              <X className="h-3 w-3" />
+                            </Button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                  
+                  {/* Compose bar */}
+                  <div className="p-3">
+                    <div className="flex gap-2 items-end">
+                      {attachedFiles.length < 3 ? (
+                        <ObjectUploader
+                          maxNumberOfFiles={3 - attachedFiles.length}
+                          uploadType="image"
+                          onGetUploadParameters={getUploadParameters}
+                          onComplete={handleUploadComplete}
+                          buttonVariant="ghost"
+                          buttonClassName="min-h-[44px] min-w-[44px] shrink-0"
+                        >
+                          <Paperclip className="h-5 w-5" />
+                        </ObjectUploader>
+                      ) : (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="min-h-[44px] min-w-[44px] shrink-0 opacity-50 cursor-not-allowed"
+                          disabled
+                          data-testid="button-attach-file-disabled"
+                        >
+                          <Paperclip className="h-5 w-5" />
+                        </Button>
+                      )}
+                      <Input
+                        placeholder="Écrivez un message..."
+                        value={messageInput}
+                        onChange={(e) => {
+                          setMessageInput(e.target.value);
+                          handleTyping();
+                        }}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter" && !e.shiftKey) {
+                            e.preventDefault();
+                            sendMessage();
+                          }
+                        }}
+                        className="min-h-[44px]"
+                        data-testid="input-message"
+                      />
+                      <Button
+                        size="icon"
+                        onClick={sendMessage}
+                        disabled={!messageInput.trim() && attachedFiles.length === 0}
+                        className="min-h-[44px] min-w-[44px] shrink-0"
+                        data-testid="button-send-message"
+                      >
+                        <Send className="h-5 w-5" />
+                      </Button>
+                    </div>
                   </div>
                 </div>
               </>

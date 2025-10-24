@@ -1,9 +1,7 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import type { ReactNode } from "react";
 import Uppy from "@uppy/core";
 import { DashboardModal } from "@uppy/react";
-import "@uppy/core/dist/style.min.css";
-import "@uppy/dashboard/dist/style.min.css";
 import AwsS3 from "@uppy/aws-s3";
 import type { UploadResult } from "@uppy/core";
 import { Button } from "@/components/ui/button";
@@ -94,6 +92,17 @@ export function ObjectUploader({
         setShowModal(false);
       })
   );
+
+  // Update Uppy restrictions when props change
+  useEffect(() => {
+    uppy.setOptions({
+      restrictions: {
+        maxNumberOfFiles,
+        maxFileSize: finalMaxFileSize,
+        allowedFileTypes: finalAllowedTypes,
+      },
+    });
+  }, [uppy, maxNumberOfFiles, finalMaxFileSize, finalAllowedTypes]);
 
   return (
     <div>

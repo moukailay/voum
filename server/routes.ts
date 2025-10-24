@@ -32,9 +32,45 @@ const createTripSchema = insertTripSchema
 interface WSClient {
   ws: WebSocket;
   userId: string;
+  onlineStatus: "online" | "offline";
+  lastSeen: Date;
+  typingTo?: string; // userId of the person they're typing to
+  typingTimeout?: NodeJS.Timeout;
 }
 
 const clients = new Map<string, WSClient>();
+
+// Helper function to broadcast user status to relevant clients
+function broadcastUserStatus(userId: string, status: "online" | "offline") {
+  const statusMessage = {
+    type: "user_status",
+    userId,
+    status,
+    timestamp: new Date().toISOString(),
+  };
+
+  // Broadcast to all connected clients
+  for (const [_, client] of clients.entries()) {
+    if (client.ws.readyState === WebSocket.OPEN) {
+      client.ws.send(JSON.stringify(statusMessage));
+    }
+  }
+}
+
+// Helper function to broadcast typing indicator
+function broadcastTypingIndicator(senderId: string, receiverId: string, isTyping: boolean) {
+  const receiverClient = clients.get(receiverId);
+  if (receiverClient && receiverClient.ws.readyState === WebSocket.OPEN) {
+    receiverClient.ws.send(
+      JSON.stringify({
+        type: "typing_indicator",
+        userId: senderId,
+        isTyping,
+        timestamp: new Date().toISOString(),
+      })
+    );
+  }
+}
 
 export async function registerRoutes(app: Express): Promise<Server> {
   // Setup authentication
@@ -493,20 +529,123 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
         // Handle authentication
         if (message.type === "auth") {
-          clients.set(message.userId, { ws, userId: message.userId });
+          clients.set(message.userId, { 
+            ws, 
+            userId: message.userId,
+            onlineStatus: "online",
+            lastSeen: new Date(),
+          });
           console.log(`User ${message.userId} authenticated via WebSocket`);
+          
+          // Broadcast user online status
+          broadcastUserStatus(message.userId, "online");
+          
+          // Send current online users to the newly connected user
+          const onlineUsers = Array.from(clients.entries())
+            .filter(([_, client]) => client.onlineStatus === "online")
+            .map(([userId, _]) => userId);
+          
+          ws.send(JSON.stringify({
+            type: "online_users",
+            users: onlineUsers,
+          }));
+          
+          return;
+        }
+
+        // Get authenticated user
+        const senderId = Array.from(clients.entries()).find(
+          ([_, client]) => client.ws === ws
+        )?.[0];
+
+        if (!senderId) {
+          ws.send(JSON.stringify({ type: "error", message: "Not authenticated" }));
+          return;
+        }
+
+        // Handle typing indicator
+        if (message.type === "typing") {
+          const client = clients.get(senderId);
+          if (client) {
+            // Clear existing typing timeout
+            if (client.typingTimeout) {
+              clearTimeout(client.typingTimeout);
+            }
+
+            // Update typing state
+            client.typingTo = message.receiverId;
+            
+            // Broadcast typing indicator
+            broadcastTypingIndicator(senderId, message.receiverId, true);
+
+            // Auto-stop typing after 3 seconds of inactivity
+            client.typingTimeout = setTimeout(() => {
+              if (client.typingTo === message.receiverId) {
+                client.typingTo = undefined;
+                broadcastTypingIndicator(senderId, message.receiverId, false);
+              }
+            }, 3000);
+          }
+          return;
+        }
+
+        // Handle stop typing
+        if (message.type === "stop_typing") {
+          const client = clients.get(senderId);
+          if (client) {
+            if (client.typingTimeout) {
+              clearTimeout(client.typingTimeout);
+            }
+            client.typingTo = undefined;
+            broadcastTypingIndicator(senderId, message.receiverId, false);
+          }
+          return;
+        }
+
+        // Handle read receipt
+        if (message.type === "read_receipt") {
+          // Update message as read in database
+          // Note: This would need a storage method to update read status
+          const receiverClient = clients.get(message.originalSenderId);
+          if (receiverClient && receiverClient.ws.readyState === WebSocket.OPEN) {
+            receiverClient.ws.send(
+              JSON.stringify({
+                type: "message_read",
+                messageId: message.messageId,
+                readBy: senderId,
+                readAt: new Date().toISOString(),
+              })
+            );
+          }
+          return;
+        }
+
+        // Handle file upload progress
+        if (message.type === "upload_progress") {
+          const receiverClient = clients.get(message.receiverId);
+          if (receiverClient && receiverClient.ws.readyState === WebSocket.OPEN) {
+            receiverClient.ws.send(
+              JSON.stringify({
+                type: "upload_progress",
+                uploadId: message.uploadId,
+                progress: message.progress,
+                fileName: message.fileName,
+              })
+            );
+          }
           return;
         }
 
         // Handle sending messages
         if (message.type === "send_message") {
-          const senderId = Array.from(clients.entries()).find(
-            ([_, client]) => client.ws === ws
-          )?.[0];
-
-          if (!senderId) {
-            ws.send(JSON.stringify({ type: "error", message: "Not authenticated" }));
-            return;
+          // Stop typing indicator if active
+          const client = clients.get(senderId);
+          if (client && client.typingTo === message.receiverId) {
+            if (client.typingTimeout) {
+              clearTimeout(client.typingTimeout);
+            }
+            client.typingTo = undefined;
+            broadcastTypingIndicator(senderId, message.receiverId, false);
           }
 
           // Create message in database
@@ -517,7 +656,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
             bookingId: message.bookingId || null,
           });
 
-          // Send to receiver if online
+          // Send delivery confirmation to sender
+          ws.send(
+            JSON.stringify({
+              type: "message_sent",
+              message: newMessage,
+              status: "sent",
+            })
+          );
+
+          // Send to receiver if online (with delivered status)
           const receiverClient = clients.get(message.receiverId);
           if (receiverClient && receiverClient.ws.readyState === WebSocket.OPEN) {
             receiverClient.ws.send(
@@ -526,15 +674,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
                 message: newMessage,
               })
             );
-          }
 
-          // Send confirmation to sender
-          ws.send(
-            JSON.stringify({
-              type: "message",
-              message: newMessage,
-            })
-          );
+            // Send delivery confirmation back to sender
+            ws.send(
+              JSON.stringify({
+                type: "message_delivered",
+                messageId: newMessage.id,
+                deliveredAt: new Date().toISOString(),
+              })
+            );
+          }
 
           // Create notification
           await storage.createNotification({
@@ -554,9 +703,22 @@ export async function registerRoutes(app: Express): Promise<Server> {
     });
 
     ws.on("close", () => {
-      // Remove client from map
+      // Remove client from map and broadcast offline status
       for (const [userId, client] of Array.from(clients.entries())) {
         if (client.ws === ws) {
+          // Clear any typing timeouts
+          if (client.typingTimeout) {
+            clearTimeout(client.typingTimeout);
+          }
+          
+          // Update status to offline
+          client.onlineStatus = "offline";
+          client.lastSeen = new Date();
+          
+          // Broadcast offline status
+          broadcastUserStatus(userId, "offline");
+          
+          // Remove client from map
           clients.delete(userId);
           console.log(`User ${userId} disconnected`);
           break;

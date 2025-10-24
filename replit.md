@@ -249,3 +249,24 @@ Preferred communication style: Simple, everyday language.
 - Created collapsible trip details section at top of conversation
 - Enhanced WebSocket handlers for real-time typing, online status, read receipts, and delivery confirmations
 - Maintained responsive layout (side-by-side on desktop, stacked on mobile)
+
+**File Attachment System (Task 6):**
+- Integrated ObjectUploader component with 3-file limit strictly enforced before upload
+- Implemented Uppy restrictions dynamically updated via useEffect for accurate slot tracking
+- Added file previews in compose bar (image/document icons, filename, size in KB)
+- Per-file removal functionality with X button before sending
+- Text validation: 2000-character limit with visual counter, error message, disabled send button
+- Backend WebSocket creates message_attachments in DB, returns full message with attachments
+- GET /api/messages endpoint includes attachments array for each message
+- Attachment rendering in message bubbles:
+  - Images: Clickable thumbnails (max 250px, thumbnailUrl fallback to url)
+  - Documents: FileText icon, truncated filename, size in KB, download link
+  - Fallback property handling for WebSocket (name/type/size) vs DB (fileName/fileType/fileSize)
+- Comprehensive error handling in ObjectUploader:
+  - restriction-failed: File too large, invalid type, too many files
+  - upload-error: Network failures
+  - Localized French error messages in toasts
+  - Uppy dashboard provides retry controls and progress states
+- All attachments use data-testid for testing (attachment-image-*, attachment-document-*, button-remove-file-*)
+- File types supported: Images (JPG/PNG) and Documents (PDF), max 5MB per file
+- Bug fix: Changed uploadType from "image" to "document" to accept both images and PDF files

@@ -768,7 +768,7 @@ export default function Messages() {
                       {attachedFiles.length < 3 ? (
                         <ObjectUploader
                           maxNumberOfFiles={3 - attachedFiles.length}
-                          uploadType="image"
+                          uploadType="document"
                           onGetUploadParameters={getUploadParameters}
                           onComplete={handleUploadComplete}
                           onError={handleUploadError}

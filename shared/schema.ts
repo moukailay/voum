@@ -126,7 +126,7 @@ export type InsertBooking = z.infer<typeof insertBookingSchema>;
 export type Booking = typeof bookings.$inferSelect;
 
 // ============================================================================
-// Messages table
+// Messages table (Enhanced with read receipts and status)
 // ============================================================================
 export const messages = pgTable("messages", {
   id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
@@ -140,18 +140,201 @@ export const messages = pgTable("messages", {
     .notNull()
     .references(() => users.id, { onDelete: "cascade" }),
   content: text("content").notNull(),
+  status: varchar("status", {
+    enum: ["sending", "sent", "delivered", "seen", "failed"],
+  })
+    .notNull()
+    .default("sending"),
   isRead: boolean("is_read").default(false),
+  readAt: timestamp("read_at"),
+  deliveredAt: timestamp("delivered_at"),
   createdAt: timestamp("created_at").defaultNow(),
-});
+  expiresAt: timestamp("expires_at"), // For message expiration
+},
+(table) => [
+  index("IDX_message_expires").on(table.expiresAt),
+  index("IDX_message_sender").on(table.senderId),
+  index("IDX_message_receiver").on(table.receiverId),
+]);
 
 export const insertMessageSchema = createInsertSchema(messages).omit({
   id: true,
   createdAt: true,
   isRead: true,
+  status: true,
+  readAt: true,
+  deliveredAt: true,
+  expiresAt: true,
 });
 
 export type InsertMessage = z.infer<typeof insertMessageSchema>;
 export type Message = typeof messages.$inferSelect;
+
+// ============================================================================
+// Message Attachments table
+// ============================================================================
+export const messageAttachments = pgTable("message_attachments", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  messageId: varchar("message_id")
+    .notNull()
+    .references(() => messages.id, { onDelete: "cascade" }),
+  fileUrl: varchar("file_url").notNull(),
+  fileName: varchar("file_name").notNull(),
+  fileType: varchar("file_type").notNull(), // image/jpeg, application/pdf, etc.
+  fileSize: integer("file_size").notNull(), // in bytes
+  thumbnailUrl: varchar("thumbnail_url"), // For images
+  expiresAt: timestamp("expires_at"), // URL expiration
+  createdAt: timestamp("created_at").defaultNow(),
+},
+(table) => [index("IDX_attachment_expires").on(table.expiresAt)]);
+
+export const insertMessageAttachmentSchema = createInsertSchema(messageAttachments).omit({
+  id: true,
+  createdAt: true,
+});
+
+export type InsertMessageAttachment = z.infer<typeof insertMessageAttachmentSchema>;
+export type MessageAttachment = typeof messageAttachments.$inferSelect;
+
+// ============================================================================
+// Blocked Users table
+// ============================================================================
+export const blockedUsers = pgTable("blocked_users", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  blockerId: varchar("blocker_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  blockedId: varchar("blocked_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  reason: text("reason"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertBlockedUserSchema = createInsertSchema(blockedUsers).omit({
+  id: true,
+  createdAt: true,
+});
+
+export type InsertBlockedUser = z.infer<typeof insertBlockedUserSchema>;
+export type BlockedUser = typeof blockedUsers.$inferSelect;
+
+// ============================================================================
+// Message Reports table
+// ============================================================================
+export const messageReports = pgTable("message_reports", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  messageId: varchar("message_id")
+    .notNull()
+    .references(() => messages.id, { onDelete: "cascade" }),
+  reporterId: varchar("reporter_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  category: varchar("category", {
+    enum: ["spam", "fraud", "abuse", "inappropriate", "other"],
+  }).notNull(),
+  description: text("description"),
+  status: varchar("status", {
+    enum: ["pending", "reviewed", "resolved", "dismissed"],
+  })
+    .notNull()
+    .default("pending"),
+  reviewedBy: varchar("reviewed_by").references(() => users.id, {
+    onDelete: "set null",
+  }),
+  reviewedAt: timestamp("reviewed_at"),
+  createdAt: timestamp("created_at").defaultNow(),
+});
+
+export const insertMessageReportSchema = createInsertSchema(messageReports).omit({
+  id: true,
+  createdAt: true,
+  status: true,
+  reviewedBy: true,
+  reviewedAt: true,
+});
+
+export type InsertMessageReport = z.infer<typeof insertMessageReportSchema>;
+export type MessageReport = typeof messageReports.$inferSelect;
+
+// ============================================================================
+// User Status table (for online/offline and typing indicators)
+// ============================================================================
+export const userStatus = pgTable("user_status", {
+  userId: varchar("user_id")
+    .primaryKey()
+    .references(() => users.id, { onDelete: "cascade" }),
+  isOnline: boolean("is_online").default(false),
+  lastSeen: timestamp("last_seen").defaultNow(),
+  typingTo: varchar("typing_to").references(() => users.id, {
+    onDelete: "set null",
+  }),
+  typingAt: timestamp("typing_at"), // When they started typing
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export type UserStatus = typeof userStatus.$inferSelect;
+
+// ============================================================================
+// User Preferences table
+// ============================================================================
+export const userPreferences = pgTable("user_preferences", {
+  userId: varchar("user_id")
+    .primaryKey()
+    .references(() => users.id, { onDelete: "cascade" }),
+  quietHoursStart: integer("quiet_hours_start"), // Hour 0-23
+  quietHoursEnd: integer("quiet_hours_end"), // Hour 0-23
+  emailNotifications: boolean("email_notifications").default(true),
+  smsNotifications: boolean("sms_notifications").default(false),
+  pushNotifications: boolean("push_notifications").default(true),
+  messageRetentionDays: integer("message_retention_days").default(90),
+  createdAt: timestamp("created_at").defaultNow(),
+  updatedAt: timestamp("updated_at").defaultNow(),
+});
+
+export type UserPreferences = typeof userPreferences.$inferSelect;
+
+// ============================================================================
+// Message Events table (comprehensive logging)
+// ============================================================================
+export const messageEvents = pgTable("message_events", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  messageId: varchar("message_id")
+    .notNull()
+    .references(() => messages.id, {
+      onDelete: "cascade",
+    }),
+  userId: varchar("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  eventType: varchar("event_type", {
+    enum: [
+      "created",
+      "sent",
+      "delivered",
+      "read",
+      "edited",
+      "deleted",
+      "reported",
+      "blocked",
+      "archived",
+    ],
+  }).notNull(),
+  metadata: jsonb("metadata"), // Additional event data
+  createdAt: timestamp("created_at").defaultNow(),
+},
+(table) => [
+  index("IDX_event_message").on(table.messageId),
+  index("IDX_event_created").on(table.createdAt),
+]);
+
+export const insertMessageEventSchema = createInsertSchema(messageEvents).omit({
+  id: true,
+  createdAt: true,
+});
+
+export type InsertMessageEvent = z.infer<typeof insertMessageEventSchema>;
+export type MessageEvent = typeof messageEvents.$inferSelect;
 
 // ============================================================================
 // Notifications table
@@ -183,12 +366,18 @@ export type Notification = typeof notifications.$inferSelect;
 // ============================================================================
 // Relations
 // ============================================================================
-export const usersRelations = relations(users, ({ many }) => ({
+export const usersRelations = relations(users, ({ one, many }) => ({
   tripsAsTraveler: many(trips),
   bookingsAsSender: many(bookings),
   sentMessages: many(messages, { relationName: "sentMessages" }),
   receivedMessages: many(messages, { relationName: "receivedMessages" }),
   notifications: many(notifications),
+  blockedByMe: many(blockedUsers, { relationName: "blockedByMe" }),
+  blockingMe: many(blockedUsers, { relationName: "blockingMe" }),
+  messageReports: many(messageReports),
+  messageEvents: many(messageEvents),
+  status: one(userStatus),
+  preferences: one(userPreferences),
 }));
 
 export const tripsRelations = relations(trips, ({ one, many }) => ({
@@ -211,7 +400,7 @@ export const bookingsRelations = relations(bookings, ({ one, many }) => ({
   messages: many(messages),
 }));
 
-export const messagesRelations = relations(messages, ({ one }) => ({
+export const messagesRelations = relations(messages, ({ one, many }) => ({
   booking: one(bookings, {
     fields: [messages.bookingId],
     references: [bookings.id],
@@ -225,6 +414,69 @@ export const messagesRelations = relations(messages, ({ one }) => ({
     fields: [messages.receiverId],
     references: [users.id],
     relationName: "receivedMessages",
+  }),
+  attachments: many(messageAttachments),
+  reports: many(messageReports),
+  events: many(messageEvents),
+}));
+
+export const messageAttachmentsRelations = relations(messageAttachments, ({ one }) => ({
+  message: one(messages, {
+    fields: [messageAttachments.messageId],
+    references: [messages.id],
+  }),
+}));
+
+export const blockedUsersRelations = relations(blockedUsers, ({ one }) => ({
+  blocker: one(users, {
+    fields: [blockedUsers.blockerId],
+    references: [users.id],
+    relationName: "blockedByMe",
+  }),
+  blocked: one(users, {
+    fields: [blockedUsers.blockedId],
+    references: [users.id],
+    relationName: "blockingMe",
+  }),
+}));
+
+export const messageReportsRelations = relations(messageReports, ({ one }) => ({
+  message: one(messages, {
+    fields: [messageReports.messageId],
+    references: [messages.id],
+  }),
+  reporter: one(users, {
+    fields: [messageReports.reporterId],
+    references: [users.id],
+  }),
+  reviewer: one(users, {
+    fields: [messageReports.reviewedBy],
+    references: [users.id],
+  }),
+}));
+
+export const userStatusRelations = relations(userStatus, ({ one }) => ({
+  user: one(users, {
+    fields: [userStatus.userId],
+    references: [users.id],
+  }),
+}));
+
+export const userPreferencesRelations = relations(userPreferences, ({ one }) => ({
+  user: one(users, {
+    fields: [userPreferences.userId],
+    references: [users.id],
+  }),
+}));
+
+export const messageEventsRelations = relations(messageEvents, ({ one }) => ({
+  message: one(messages, {
+    fields: [messageEvents.messageId],
+    references: [messages.id],
+  }),
+  user: one(users, {
+    fields: [messageEvents.userId],
+    references: [users.id],
   }),
 }));
 

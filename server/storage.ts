@@ -5,6 +5,8 @@ import {
   messages,
   messageAttachments,
   notifications,
+  blockedUsers,
+  messageReports,
   type User,
   type UpsertUser,
   type Trip,
@@ -17,6 +19,10 @@ import {
   type InsertMessageAttachment,
   type Notification,
   type InsertNotification,
+  type BlockedUser,
+  type InsertBlockedUser,
+  type MessageReport,
+  type InsertMessageReport,
 } from "@shared/schema";
 import { db } from "./db";
 import { eq, and, or, desc, sql, gte, lte } from "drizzle-orm";
@@ -59,7 +65,8 @@ export interface IStorage {
   getUserConversations(userId: string): Promise<any[]>;
   getConversationMessages(
     userId: string,
-    otherUserId: string
+    otherUserId: string,
+    options?: { limit?: number; offset?: number }
   ): Promise<Message[]>;
   markMessagesAsRead(userId: string, senderId: string): Promise<void>;
 
@@ -68,6 +75,17 @@ export interface IStorage {
     attachment: InsertMessageAttachment
   ): Promise<MessageAttachment>;
   getMessageAttachments(messageId: string): Promise<MessageAttachment[]>;
+
+  // User blocking operations
+  blockUser(blockerId: string, blockedId: string, reason?: string): Promise<BlockedUser>;
+  unblockUser(blockerId: string, blockedId: string): Promise<void>;
+  isUserBlocked(userId1: string, userId2: string): Promise<boolean>;
+  getBlockedUsers(userId: string): Promise<BlockedUser[]>;
+
+  // Message reporting operations
+  reportMessage(report: InsertMessageReport): Promise<MessageReport>;
+  getMessageReports(messageId: string): Promise<MessageReport[]>;
+  getUserReports(userId: string): Promise<MessageReport[]>;
 
   // Notification operations
   createNotification(notification: InsertNotification): Promise<Notification>;
@@ -296,8 +314,11 @@ export class DatabaseStorage implements IStorage {
 
   async getConversationMessages(
     userId: string,
-    otherUserId: string
+    otherUserId: string,
+    options?: { limit?: number; offset?: number }
   ): Promise<Message[]> {
+    const { limit = 50, offset = 0 } = options || {};
+    
     return await db
       .select()
       .from(messages)
@@ -313,7 +334,9 @@ export class DatabaseStorage implements IStorage {
           )
         )
       )
-      .orderBy(messages.createdAt);
+      .orderBy(messages.createdAt)
+      .limit(limit)
+      .offset(offset);
   }
 
   async markMessagesAsRead(userId: string, senderId: string): Promise<void> {
@@ -344,6 +367,86 @@ export class DatabaseStorage implements IStorage {
       .select()
       .from(messageAttachments)
       .where(eq(messageAttachments.messageId, messageId));
+  }
+
+  // ========== User Blocking Operations ==========
+  async blockUser(
+    blockerId: string,
+    blockedId: string,
+    reason?: string
+  ): Promise<BlockedUser> {
+    const [blocked] = await db
+      .insert(blockedUsers)
+      .values({
+        blockerId,
+        blockedId,
+        reason: reason || null,
+      })
+      .returning();
+    return blocked;
+  }
+
+  async unblockUser(blockerId: string, blockedId: string): Promise<void> {
+    await db
+      .delete(blockedUsers)
+      .where(
+        and(
+          eq(blockedUsers.blockerId, blockerId),
+          eq(blockedUsers.blockedId, blockedId)
+        )
+      );
+  }
+
+  async isUserBlocked(userId1: string, userId2: string): Promise<boolean> {
+    const blocks = await db
+      .select()
+      .from(blockedUsers)
+      .where(
+        or(
+          and(
+            eq(blockedUsers.blockerId, userId1),
+            eq(blockedUsers.blockedId, userId2)
+          ),
+          and(
+            eq(blockedUsers.blockerId, userId2),
+            eq(blockedUsers.blockedId, userId1)
+          )
+        )
+      );
+    return blocks.length > 0;
+  }
+
+  async getBlockedUsers(userId: string): Promise<BlockedUser[]> {
+    return await db
+      .select()
+      .from(blockedUsers)
+      .where(eq(blockedUsers.blockerId, userId))
+      .orderBy(desc(blockedUsers.createdAt));
+  }
+
+  // ========== Message Reporting Operations ==========
+  async reportMessage(reportData: InsertMessageReport): Promise<MessageReport> {
+    const [report] = await db
+      .insert(messageReports)
+      .values(reportData)
+      .returning();
+    return report;
+  }
+
+  async getMessageReports(messageId: string): Promise<MessageReport[]> {
+    return await db
+      .select()
+      .from(messageReports)
+      .where(eq(messageReports.messageId, messageId))
+      .orderBy(desc(messageReports.createdAt));
+  }
+
+  async getUserReports(userId: string): Promise<MessageReport[]> {
+    return await db
+      .select()
+      .from(messageReports)
+      .where(eq(messageReports.reporterId, userId))
+      .orderBy(desc(messageReports.createdAt));
   }
 
   // ========== Notification Operations ==========

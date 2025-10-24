@@ -16,6 +16,7 @@ import {
 } from "./objectStorage";
 import { ObjectAccessGroupType, ObjectPermission } from "./objectAcl";
 import { validateUploadedFile, validateFileMetadata } from "./fileValidator";
+import { filterContent, shouldBlockContent } from "./contentFilter";
 
 // Create API schemas that accept date strings
 const createTripSchema = insertTripSchema
@@ -340,9 +341,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
   app.get("/api/messages/:otherUserId", isAuthenticated, async (req: any, res) => {
     try {
       const userId = req.user.claims.sub;
+      
+      // Check if users have blocked each other
+      const isBlocked = await storage.isUserBlocked(userId, req.params.otherUserId);
+      if (isBlocked) {
+        return res.status(403).json({ message: "Cannot access messages with blocked user" });
+      }
+      
+      // Parse pagination parameters
+      const limit = parseInt(req.query.limit as string) || 50;
+      const offset = parseInt(req.query.offset as string) || 0;
+      
       const messages = await storage.getConversationMessages(
         userId,
-        req.params.otherUserId
+        req.params.otherUserId,
+        { limit, offset }
       );
 
       // Mark messages as read
@@ -516,6 +529,134 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // ==================== User Blocking Routes ====================
+  app.post("/api/users/block", isAuthenticated, async (req: any, res) => {
+    try {
+      const blockerId = req.user.claims.sub;
+      const { blockedId, reason } = req.body;
+
+      if (!blockedId) {
+        return res.status(400).json({ message: "Missing blockedId" });
+      }
+
+      if (blockerId === blockedId) {
+        return res.status(400).json({ message: "Cannot block yourself" });
+      }
+
+      const blocked = await storage.blockUser(blockerId, blockedId, reason);
+      
+      // Create notification for system log (optional)
+      await storage.createNotification({
+        userId: blockerId,
+        type: "system",
+        title: "User Blocked",
+        message: `You have blocked a user`,
+        relatedId: blocked.id,
+      });
+
+      res.json(blocked);
+    } catch (error) {
+      console.error("Error blocking user:", error);
+      res.status(500).json({ message: "Failed to block user" });
+    }
+  });
+
+  app.delete("/api/users/block/:blockedId", isAuthenticated, async (req: any, res) => {
+    try {
+      const blockerId = req.user.claims.sub;
+      const { blockedId } = req.params;
+
+      await storage.unblockUser(blockerId, blockedId);
+      res.json({ success: true });
+    } catch (error) {
+      console.error("Error unblocking user:", error);
+      res.status(500).json({ message: "Failed to unblock user" });
+    }
+  });
+
+  app.get("/api/users/blocked", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const blockedUsers = await storage.getBlockedUsers(userId);
+      
+      // Fetch user details for each blocked user
+      const blockedWithUsers = await Promise.all(
+        blockedUsers.map(async (block) => {
+          const user = await storage.getUser(block.blockedId);
+          return { ...block, user };
+        })
+      );
+
+      res.json(blockedWithUsers);
+    } catch (error) {
+      console.error("Error fetching blocked users:", error);
+      res.status(500).json({ message: "Failed to fetch blocked users" });
+    }
+  });
+
+  // ==================== Message Reporting Routes ====================
+  app.post("/api/messages/:messageId/report", isAuthenticated, async (req: any, res) => {
+    try {
+      const reporterId = req.user.claims.sub;
+      const { messageId } = req.params;
+      const { category, details } = req.body;
+
+      if (!category) {
+        return res.status(400).json({ message: "Missing category" });
+      }
+
+      // Validate category
+      const validCategories = ["spam", "fraud", "abuse", "inappropriate", "other"];
+      if (!validCategories.includes(category)) {
+        return res.status(400).json({ message: "Invalid category" });
+      }
+
+      const report = await storage.reportMessage({
+        messageId,
+        reporterId,
+        category: category as any,
+        details: details || null,
+        status: "pending",
+      });
+
+      // Create notification for admins (in a real app, this would notify moderators)
+      await storage.createNotification({
+        userId: reporterId,
+        type: "system",
+        title: "Message Reported",
+        message: `Your report has been submitted for review`,
+        relatedId: report.id,
+      });
+
+      res.json(report);
+    } catch (error) {
+      console.error("Error reporting message:", error);
+      res.status(500).json({ message: "Failed to report message" });
+    }
+  });
+
+  app.get("/api/messages/:messageId/reports", isAuthenticated, async (req: any, res) => {
+    try {
+      const { messageId } = req.params;
+      const reports = await storage.getMessageReports(messageId);
+      res.json(reports);
+    } catch (error) {
+      console.error("Error fetching message reports:", error);
+      res.status(500).json({ message: "Failed to fetch message reports" });
+    }
+  });
+
+  app.get("/api/users/reports", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const reports = await storage.getUserReports(userId);
+      res.json(reports);
+    } catch (error) {
+      console.error("Error fetching user reports:", error);
+      res.status(500).json({ message: "Failed to fetch user reports" });
+    }
+  });
+
   // ==================== WebSocket Server ====================
   const httpServer = createServer(app);
   const wss = new WebSocketServer({ server: httpServer, path: "/ws" });
@@ -638,6 +779,38 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
         // Handle sending messages
         if (message.type === "send_message") {
+          // Check if users have blocked each other
+          const isBlocked = await storage.isUserBlocked(senderId, message.receiverId);
+          if (isBlocked) {
+            ws.send(
+              JSON.stringify({
+                type: "error",
+                message: "Cannot send message to blocked user",
+              })
+            );
+            return;
+          }
+
+          // Content filtering
+          const filterResult = filterContent(message.content);
+          if (shouldBlockContent(message.content)) {
+            ws.send(
+              JSON.stringify({
+                type: "error",
+                message: "Message blocked due to inappropriate content",
+              })
+            );
+            return;
+          }
+
+          // Log content filter warning if flagged (but not blocked)
+          if (!filterResult.isClean) {
+            console.warn(
+              `Message from ${senderId} flagged with severity ${filterResult.severity}:`,
+              filterResult.flaggedWords
+            );
+          }
+
           // Stop typing indicator if active
           const client = clients.get(senderId);
           if (client && client.typingTo === message.receiverId) {

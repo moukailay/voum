@@ -67,9 +67,14 @@ Preferred communication style: Simple, everyday language.
 - Transaction support for data integrity
 
 **Real-time Features:**
-- WebSocket server for real-time messaging between users
-- Client tracking map for active WebSocket connections
-- Message broadcasting based on user IDs
+- Enhanced WebSocket server for real-time messaging with advanced features:
+  - Typing indicators with 3-second auto-stop timeout
+  - Online/offline status broadcasting to all clients
+  - Read receipts (message seen notifications)
+  - Message delivery confirmations (sent → delivered → read)
+  - File upload progress notifications
+  - Client tracking with online status, last seen, and typing state
+  - Automatic cleanup of typing timeouts on disconnect
 
 ### Database Schema
 
@@ -99,17 +104,53 @@ Preferred communication style: Simple, everyday language.
 4. **Messages Table:**
    - Direct messaging between users
    - Links to specific bookings for context
+   - Message status tracking (sending, sent, delivered, failed)
    - Timestamp tracking for conversation ordering
    - Foreign keys to sender and receiver (users)
 
-5. **Notifications Table:**
-   - User notifications for booking updates, messages, etc.
-   - Read/unread status tracking
-   - Type categorization for different notification kinds
+5. **Message Attachments Table:**
+   - File attachments for messages (images, documents)
+   - Secure object storage URLs with ACL-based access control
+   - File metadata (name, type, size, thumbnail URL)
+   - Optional expiration dates for temporary attachments
+   - Foreign key to message (nullable for pre-message uploads)
 
-6. **Sessions Table:**
-   - Required for Replit Auth session persistence
-   - Stores serialized session data with expiration
+6. **Blocked Users Table:**
+   - User blocking for moderation
+   - Prevents messaging between blocked users
+   - Foreign keys to blocker and blocked user
+
+7. **Message Reports Table:**
+   - Report system for inappropriate messages
+   - Categories: spam, fraud, abuse, other
+   - Status tracking (pending, reviewed, resolved)
+   - Foreign keys to reporter, reported message, and reported user
+
+8. **User Status Table:**
+   - Tracks online/offline/away status
+   - Last seen timestamps
+   - Optional status messages
+
+9. **User Preferences Table:**
+   - Notification preferences (email, push, SMS)
+   - Quiet hours configuration
+   - Notification sound settings
+   - Foreign key to user
+
+10. **Message Events Table:**
+    - Comprehensive audit log for all message actions
+    - Event types: created, read, edited, deleted, reported, blocked
+    - Metadata stored as JSONB for flexible logging
+    - Foreign key to message (NOT NULL)
+
+11. **Notifications Table:**
+    - User notifications for booking updates, messages, file uploads, etc.
+    - Read/unread status tracking
+    - Type categorization for different notification kinds
+
+12. **Sessions Table:**
+    - Required for Replit Auth session persistence
+    - Stores serialized session data with expiration
 
 **Design Decisions:**
 - PostgreSQL via Neon Database (serverless PostgreSQL)
@@ -151,3 +192,41 @@ Preferred communication style: Simple, everyday language.
 - esbuild for server bundle production builds
 - Vite for client bundle production builds
 - Separate dist folders for client (dist/public) and server (dist)
+
+**File Storage & Security:**
+- Replit Object Storage integration (@google-cloud/storage, @uppy/core, @uppy/aws-s3)
+- ACL-based access control for private file attachments
+- Comprehensive file validation system (server/fileValidator.ts):
+  - MIME type validation (only PDF, JPG, PNG allowed)
+  - File size limits (3MB for images, 5MB for documents)
+  - Suspicious filename detection (blocks executables, path traversal)
+  - Magic byte validation (file signature checking for type mismatch detection)
+  - Content pattern scanning (detects embedded scripts, PHP eval, event handlers)
+- Two-step antivirus scanning before file persistence
+- ObjectUploader component with client-side defaults and preview support
+- Presigned URL generation for secure direct-to-storage uploads
+
+## Recent Changes (Phase 2)
+
+### October 24, 2025
+
+**Database Schema Enhancements:**
+- Added 6 new tables for rich messaging features (message_attachments, blocked_users, message_reports, user_status, user_preferences, message_events)
+- Fixed critical schema issues (messages.status default value, messageEvents.messageId NOT NULL constraint)
+- Added proper indexes for query performance (expiresAt, message queries)
+- Configured cascade deletion for foreign key relationships
+
+**File Storage Integration:**
+- Installed and configured Replit Object Storage for file uploads
+- Implemented ObjectUploader React component with file type defaults
+- Created comprehensive server-side validation with two-step antivirus scanning
+- Set up ACL policies for private attachment access control
+- File types: Images (JPG/PNG, 3MB max), Documents (PDF, 5MB max)
+
+**Enhanced WebSocket Protocol:**
+- Extended WebSocket server with typing indicators (auto-stop after 3s)
+- Implemented online/offline status broadcasting
+- Added read receipts (message seen notifications)
+- Created delivery confirmation system (sent → delivered → read)
+- Added file upload progress notifications
+- Improved client lifecycle management with proper cleanup

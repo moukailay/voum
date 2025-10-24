@@ -11,13 +11,14 @@ import { ObjectUploader } from "@/components/ObjectUploader";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
-import type { Message, User } from "@shared/schema";
+import type { Message, User, MessageAttachment } from "@shared/schema";
 import { format } from "date-fns";
 import type { UploadResult } from "@uppy/core";
 
 interface MessageWithUsers extends Message {
   sender?: User;
   receiver?: User;
+  attachments?: MessageAttachment[];
 }
 
 interface Conversation {

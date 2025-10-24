@@ -361,12 +361,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Mark messages as read
       await storage.markMessagesAsRead(userId, req.params.otherUserId);
 
-      // Fetch sender and receiver details
+      // Fetch sender, receiver details, and attachments for each message
       const messagesWithUsers = await Promise.all(
         messages.map(async (msg) => {
           const sender = await storage.getUser(msg.senderId);
           const receiver = await storage.getUser(msg.receiverId);
-          return { ...msg, sender, receiver };
+          const attachments = await storage.getMessageAttachments(msg.id);
+          return { ...msg, sender, receiver, attachments };
         })
       );
 
@@ -830,11 +831,33 @@ export async function registerRoutes(app: Express): Promise<Server> {
             bookingId: message.bookingId || null,
           });
 
+          // Create message attachments if any
+          let messageAttachments: any[] = [];
+          if (message.attachments && Array.isArray(message.attachments) && message.attachments.length > 0) {
+            for (const attachment of message.attachments) {
+              const createdAttachment = await storage.createMessageAttachment({
+                messageId: newMessage.id,
+                url: attachment.url,
+                fileName: attachment.name || attachment.fileName,
+                fileType: attachment.type || attachment.fileType,
+                fileSize: attachment.size || attachment.fileSize,
+                thumbnailUrl: attachment.thumbnailUrl || null,
+              });
+              messageAttachments.push(createdAttachment);
+            }
+          }
+
+          // Include attachments in message response
+          const messageWithAttachments = {
+            ...newMessage,
+            attachments: messageAttachments,
+          };
+
           // Send delivery confirmation to sender (echo back clientMessageId)
           ws.send(
             JSON.stringify({
               type: "message_sent",
-              message: newMessage,
+              message: messageWithAttachments,
               status: "sent",
               clientMessageId: message.clientMessageId,
             })
@@ -846,7 +869,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             receiverClient.ws.send(
               JSON.stringify({
                 type: "message",
-                message: newMessage,
+                message: messageWithAttachments,
               })
             );
 

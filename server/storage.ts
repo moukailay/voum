@@ -3,6 +3,7 @@ import {
   trips,
   bookings,
   messages,
+  messageAttachments,
   notifications,
   type User,
   type UpsertUser,
@@ -12,6 +13,8 @@ import {
   type InsertBooking,
   type Message,
   type InsertMessage,
+  type MessageAttachment,
+  type InsertMessageAttachment,
   type Notification,
   type InsertNotification,
 } from "@shared/schema";
@@ -59,6 +62,12 @@ export interface IStorage {
     otherUserId: string
   ): Promise<Message[]>;
   markMessagesAsRead(userId: string, senderId: string): Promise<void>;
+
+  // Message attachment operations
+  createMessageAttachment(
+    attachment: InsertMessageAttachment
+  ): Promise<MessageAttachment>;
+  getMessageAttachments(messageId: string): Promise<MessageAttachment[]>;
 
   // Notification operations
   createNotification(notification: InsertNotification): Promise<Notification>;
@@ -275,7 +284,7 @@ export class DatabaseStorage implements IStorage {
     }
 
     // Count unread messages
-    for (const [userId, conv] of conversations) {
+    for (const [userId, conv] of Array.from(conversations.entries())) {
       const unreadCount = receivedMessages.filter(
         (m) => m.senderId === userId && !m.isRead
       ).length;
@@ -317,6 +326,24 @@ export class DatabaseStorage implements IStorage {
           eq(messages.senderId, senderId)
         )
       );
+  }
+
+  // ========== Message Attachment Operations ==========
+  async createMessageAttachment(
+    attachmentData: InsertMessageAttachment
+  ): Promise<MessageAttachment> {
+    const [attachment] = await db
+      .insert(messageAttachments)
+      .values(attachmentData)
+      .returning();
+    return attachment;
+  }
+
+  async getMessageAttachments(messageId: string): Promise<MessageAttachment[]> {
+    return await db
+      .select()
+      .from(messageAttachments)
+      .where(eq(messageAttachments.messageId, messageId));
   }
 
   // ========== Notification Operations ==========

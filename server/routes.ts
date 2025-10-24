@@ -7,8 +7,15 @@ import {
   insertTripSchema,
   insertBookingSchema,
   insertMessageSchema,
+  insertMessageAttachmentSchema,
 } from "@shared/schema";
 import { z } from "zod";
+import {
+  ObjectStorageService,
+  ObjectNotFoundError,
+} from "./objectStorage";
+import { ObjectAccessGroupType, ObjectPermission } from "./objectAcl";
+import { validateUploadedFile, validateFileMetadata } from "./fileValidator";
 
 // Create API schemas that accept date strings
 const createTripSchema = insertTripSchema
@@ -321,6 +328,136 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // ==================== File Upload Routes ====================
+  // Get presigned upload URL for file attachments
+  app.post("/api/objects/upload", isAuthenticated, async (req, res) => {
+    try {
+      const objectStorageService = new ObjectStorageService();
+      const uploadURL = await objectStorageService.getObjectEntityUploadURL();
+      res.json({ uploadURL });
+    } catch (error) {
+      console.error("Error generating upload URL:", error);
+      res.status(500).json({ message: "Failed to generate upload URL" });
+    }
+  });
+
+  // Create message attachment record and set ACL policy
+  app.post("/api/message-attachments", isAuthenticated, async (req: any, res) => {
+    try {
+      const userId = req.user.claims.sub;
+      const { fileUrl, fileName, fileType, fileSize, thumbnailUrl, messageId, bookingId } = req.body;
+
+      if (!fileUrl || !fileName || !fileType || !fileSize) {
+        return res.status(400).json({ message: "Missing required fields" });
+      }
+
+      // Step 1: Basic metadata validation (fast checks)
+      const metadataValidation = validateFileMetadata({
+        fileName,
+        fileType,
+        fileSize,
+      });
+
+      if (!metadataValidation.valid) {
+        return res.status(400).json({ message: metadataValidation.error });
+      }
+
+      const normalizedMimeType = fileType.toLowerCase();
+
+      // Step 2: Validate insertMessageAttachmentSchema
+      try {
+        insertMessageAttachmentSchema.parse({
+          messageId: messageId || null,
+          fileUrl,
+          fileName,
+          fileType: normalizedMimeType,
+          fileSize,
+          thumbnailUrl: thumbnailUrl || null,
+          expiresAt: null,
+        });
+      } catch (validationError) {
+        return res.status(400).json({ 
+          message: "Validation failed",
+          errors: validationError 
+        });
+      }
+
+      // Step 3: Comprehensive file validation including malware/signature checks
+      // This includes magic byte validation to detect file type mismatches
+      const fileValidation = await validateUploadedFile({
+        fileUrl,
+        fileName,
+        fileType,
+        fileSize,
+      });
+
+      if (!fileValidation.valid) {
+        return res.status(400).json({ message: fileValidation.error });
+      }
+
+      // Set ACL policy for the uploaded file
+      const objectStorageService = new ObjectStorageService();
+      const objectPath = await objectStorageService.trySetObjectEntityAclPolicy(
+        fileUrl,
+        {
+          owner: userId,
+          visibility: "private",
+          aclRules: bookingId ? [
+            {
+              group: {
+                type: ObjectAccessGroupType.CONVERSATION_PARTICIPANT,
+                id: bookingId,
+              },
+              permission: ObjectPermission.READ,
+            },
+          ] : [],
+        }
+      );
+
+      // Create attachment record with normalized MIME type
+      const attachment = await storage.createMessageAttachment({
+        messageId: messageId || null,
+        fileUrl: objectPath,
+        fileName,
+        fileType: normalizedMimeType,
+        fileSize,
+        thumbnailUrl: thumbnailUrl || null,
+        expiresAt: null, // No expiration for now
+      });
+
+      res.json({ attachment, objectPath });
+    } catch (error) {
+      console.error("Error creating message attachment:", error);
+      res.status(500).json({ message: "Failed to create message attachment" });
+    }
+  });
+
+  // Serve uploaded files with ACL check
+  app.get("/objects/:objectPath(*)", isAuthenticated, async (req: any, res) => {
+    const userId = req.user?.claims?.sub;
+    const objectStorageService = new ObjectStorageService();
+    try {
+      const objectFile = await objectStorageService.getObjectEntityFile(
+        req.path,
+      );
+      const canAccess = await objectStorageService.canAccessObjectEntity({
+        objectFile,
+        userId: userId,
+        requestedPermission: ObjectPermission.READ,
+      });
+      if (!canAccess) {
+        return res.sendStatus(401);
+      }
+      objectStorageService.downloadObject(objectFile, res);
+    } catch (error) {
+      console.error("Error accessing object:", error);
+      if (error instanceof ObjectNotFoundError) {
+        return res.sendStatus(404);
+      }
+      return res.sendStatus(500);
+    }
+  });
+
   // ==================== Notification Routes ====================
   app.get("/api/notifications", isAuthenticated, async (req: any, res) => {
     try {
@@ -418,7 +555,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
     ws.on("close", () => {
       // Remove client from map
-      for (const [userId, client] of clients.entries()) {
+      for (const [userId, client] of Array.from(clients.entries())) {
         if (client.ws === ws) {
           clients.delete(userId);
           console.log(`User ${userId} disconnected`);

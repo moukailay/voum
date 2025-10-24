@@ -227,6 +227,25 @@ Preferred communication style: Simple, everyday language.
 - Extended WebSocket server with typing indicators (auto-stop after 3s)
 - Implemented online/offline status broadcasting
 - Added read receipts (message seen notifications)
-- Created delivery confirmation system (sent → delivered → read)
+- Created delivery confirmation system (sent → delivered → seen)
 - Added file upload progress notifications
 - Improved client lifecycle management with proper cleanup
+
+**Backend API Enhancements:**
+- User Blocking APIs: POST /api/users/block, DELETE /api/users/block/:blockedId, GET /api/users/blocked
+- Message Reporting APIs: POST /api/messages/:messageId/report with category validation
+- Conversation pagination: limit/offset query parameters (default: limit=50, offset=0)
+- Content filtering: server/contentFilter.ts with prohibited words detection and severity-based blocking
+- Integrated blocking checks into message retrieval and WebSocket sending
+- All moderation features create notifications for audit trail
+
+**Mobile-First Messaging UI (Task 5):**
+- Redesigned Messages page with compact header (avatar, name, rating, "View Trip" button)
+- Implemented one-handed operation with 44px+ tap targets for all interactive elements
+- Added sticky compose bar at bottom with attachment button
+- Integrated message status indicators (sending→sent→delivered→seen→failed with visual icons)
+- Implemented typing indicators (animated dots when other user is typing)
+- Added online status badges (green dot on avatar in conversation list and header)
+- Created collapsible trip details section at top of conversation
+- Enhanced WebSocket handlers for real-time typing, online status, read receipts, and delivery confirmations
+- Maintained responsive layout (side-by-side on desktop, stacked on mobile)

@@ -1,13 +1,15 @@
 import { useState, useEffect, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Send, MessageCircle } from "lucide-react";
+import { Send, MessageCircle, Star, ArrowLeft, Paperclip, ChevronDown, ChevronUp, Package, MapPin, Calendar, Weight } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { Badge } from "@/components/ui/badge";
 import { useAuth } from "@/hooks/useAuth";
 import { cn } from "@/lib/utils";
 import type { Message, User } from "@shared/schema";
+import { format } from "date-fns";
 
 interface MessageWithUsers extends Message {
   sender?: User;
@@ -22,13 +24,29 @@ interface Conversation {
   bookingId?: string;
 }
 
+interface TypingUser {
+  userId: string;
+  timestamp: number;
+}
+
+interface OnlineStatus {
+  [userId: string]: boolean;
+}
+
 export default function Messages() {
   const { user } = useAuth();
   const [selectedConversation, setSelectedConversation] = useState<string | null>(null);
   const [messageInput, setMessageInput] = useState("");
   const [messages, setMessages] = useState<MessageWithUsers[]>([]);
+  const [isTyping, setIsTyping] = useState(false);
+  const [typingUsers, setTypingUsers] = useState<TypingUser[]>([]);
+  const [onlineUsers, setOnlineUsers] = useState<OnlineStatus>({});
+  const [isTripDetailsOpen, setIsTripDetailsOpen] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
+  const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const typingCleanupIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const pendingMessagesRef = useRef<Map<string, boolean>>(new Map());
 
   // Fetch conversations list
   const { data: conversations } = useQuery<Conversation[]>({
@@ -56,8 +74,93 @@ export default function Messages() {
 
     socket.onmessage = (event) => {
       const data = JSON.parse(event.data);
+      
+      // Handle new messages
       if (data.type === "message") {
-        setMessages((prev) => [...prev, data.message]);
+        setMessages((prev) => {
+          // Update message status if it already exists
+          const existingIndex = prev.findIndex((m) => m.id === data.message.id);
+          if (existingIndex >= 0) {
+            const updated = [...prev];
+            updated[existingIndex] = { ...updated[existingIndex], ...data.message };
+            return updated;
+          }
+          return [...prev, data.message];
+        });
+      }
+
+      // Handle message sent confirmation
+      if (data.type === "message_sent") {
+        setMessages((prev) => {
+          const updated = [...prev];
+          // Find and replace the temporary message using clientMessageId
+          const clientMsgId = data.clientMessageId;
+          if (clientMsgId && pendingMessagesRef.current.has(clientMsgId)) {
+            const tempIndex = updated.findIndex((m) => m.id === clientMsgId);
+            if (tempIndex >= 0) {
+              // Replace temp message with real message
+              updated[tempIndex] = { ...data.message, status: "sent" };
+              pendingMessagesRef.current.delete(clientMsgId);
+            }
+          } else {
+            // Fallback: add message if temp not found
+            updated.push({ ...data.message, status: "sent" });
+          }
+          return updated;
+        });
+      }
+
+      // Handle message delivered confirmation
+      if (data.type === "message_delivered") {
+        setMessages((prev) => {
+          const updated = [...prev];
+          const index = updated.findIndex((m) => m.id === data.messageId);
+          if (index >= 0) {
+            updated[index] = { ...updated[index], status: "delivered" };
+          }
+          return updated;
+        });
+      }
+
+      // Handle message read confirmation
+      if (data.type === "message_read") {
+        setMessages((prev) => {
+          const updated = [...prev];
+          const index = updated.findIndex((m) => m.id === data.messageId);
+          if (index >= 0) {
+            updated[index] = { ...updated[index], status: "seen" };
+          }
+          return updated;
+        });
+      }
+
+      // Handle typing indicator
+      if (data.type === "typing") {
+        if (data.isTyping) {
+          setTypingUsers((prev) => {
+            const filtered = prev.filter((u) => u.userId !== data.userId);
+            return [...filtered, { userId: data.userId, timestamp: Date.now() }];
+          });
+        } else {
+          setTypingUsers((prev) => prev.filter((u) => u.userId !== data.userId));
+        }
+      }
+
+      // Handle online status updates
+      if (data.type === "user_status") {
+        setOnlineUsers((prev) => ({
+          ...prev,
+          [data.userId]: data.status === "online",
+        }));
+      }
+
+      // Handle initial online users list
+      if (data.type === "online_users") {
+        const statusMap: OnlineStatus = {};
+        data.users.forEach((userId: string) => {
+          statusMap[userId] = true;
+        });
+        setOnlineUsers(statusMap);
       }
     };
 
@@ -71,8 +174,17 @@ export default function Messages() {
 
     wsRef.current = socket;
 
+    // Set up typing cleanup interval (every second, remove entries older than 3 seconds)
+    typingCleanupIntervalRef.current = setInterval(() => {
+      const now = Date.now();
+      setTypingUsers((prev) => prev.filter((u) => now - u.timestamp < 3000));
+    }, 1000);
+
     return () => {
       socket.close();
+      if (typingCleanupIntervalRef.current) {
+        clearInterval(typingCleanupIntervalRef.current);
+      }
     };
   }, [user]);
 
@@ -88,22 +200,121 @@ export default function Messages() {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
+  // Send typing indicator
+  const handleTyping = () => {
+    if (!selectedConversation || !wsRef.current) return;
+
+    if (!isTyping) {
+      setIsTyping(true);
+      wsRef.current.send(
+        JSON.stringify({
+          type: "typing",
+          receiverId: selectedConversation,
+          isTyping: true,
+        })
+      );
+    }
+
+    // Clear existing timeout
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
+    }
+
+    // Set new timeout to stop typing indicator
+    typingTimeoutRef.current = setTimeout(() => {
+      setIsTyping(false);
+      if (wsRef.current) {
+        wsRef.current.send(
+          JSON.stringify({
+            type: "typing",
+            receiverId: selectedConversation,
+            isTyping: false,
+          })
+        );
+      }
+    }, 3000);
+  };
+
   const sendMessage = () => {
     if (!messageInput.trim() || !selectedConversation || !wsRef.current) return;
+
+    const tempId = `temp-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    const tempMessage: MessageWithUsers = {
+      id: tempId,
+      senderId: user!.id,
+      receiverId: selectedConversation,
+      content: messageInput.trim(),
+      status: "sending",
+      createdAt: new Date(),
+      bookingId: null,
+      isRead: false,
+      readAt: null,
+      deliveredAt: null,
+      expiresAt: null,
+    };
+
+    // Track pending message for reconciliation
+    pendingMessagesRef.current.set(tempId, true);
+
+    // Add temporary message with "sending" status
+    setMessages((prev) => [...prev, tempMessage]);
 
     const messageData = {
       type: "send_message",
       receiverId: selectedConversation,
       content: messageInput.trim(),
+      clientMessageId: tempId,
     };
 
     wsRef.current.send(JSON.stringify(messageData));
     setMessageInput("");
+    setIsTyping(false);
+
+    if (typingTimeoutRef.current) {
+      clearTimeout(typingTimeoutRef.current);
+    }
   };
+
+  // Send read receipt when messages are viewed
+  useEffect(() => {
+    if (!selectedConversation || !wsRef.current || messages.length === 0) return;
+
+    const lastMessage = messages[messages.length - 1];
+    if (lastMessage.senderId === selectedConversation && lastMessage.status !== "seen") {
+      wsRef.current.send(
+        JSON.stringify({
+          type: "read_receipt",
+          messageId: lastMessage.id,
+          originalSenderId: lastMessage.senderId,
+        })
+      );
+    }
+  }, [messages, selectedConversation]);
 
   const selectedUser = conversations?.find(
     (c) => c.userId === selectedConversation
   )?.user;
+
+  const isUserOnline = selectedConversation ? onlineUsers[selectedConversation] : false;
+  const isOtherUserTyping = typingUsers.some((t) => t.userId === selectedConversation);
+
+  // Get message status icon
+  const getMessageStatusIcon = (status: string | null | undefined) => {
+    switch (status) {
+      case "sending":
+        return <span className="text-xs">●</span>;
+      case "sent":
+        return <span className="text-xs">✓</span>;
+      case "delivered":
+        return <span className="text-xs">✓✓</span>;
+      case "seen":
+        return <span className="text-xs text-primary-foreground">✓✓</span>;
+      case "failed":
+        return <span className="text-xs text-destructive">!</span>;
+      default:
+        return null;
+    }
+  };
 
   return (
     <div className="pb-20 md:pb-8">
@@ -132,18 +343,23 @@ export default function Messages() {
                     key={conv.userId}
                     onClick={() => setSelectedConversation(conv.userId)}
                     className={cn(
-                      "w-full p-4 hover-elevate text-left transition-colors",
+                      "w-full p-4 hover-elevate text-left transition-colors min-h-[80px]",
                       selectedConversation === conv.userId && "bg-muted"
                     )}
                     data-testid={`conversation-${conv.userId}`}
                   >
                     <div className="flex items-center gap-3">
-                      <Avatar className="h-12 w-12">
-                        <AvatarImage src={conv.user?.profileImageUrl || undefined} />
-                        <AvatarFallback>
-                          {conv.user?.firstName?.[0] || conv.user?.email?.[0] || "U"}
-                        </AvatarFallback>
-                      </Avatar>
+                      <div className="relative">
+                        <Avatar className="h-12 w-12">
+                          <AvatarImage src={conv.user?.profileImageUrl || undefined} />
+                          <AvatarFallback>
+                            {conv.user?.firstName?.[0] || conv.user?.email?.[0] || "U"}
+                          </AvatarFallback>
+                        </Avatar>
+                        {onlineUsers[conv.userId] && (
+                          <div className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 border-2 border-background rounded-full" />
+                        )}
+                      </div>
                       <div className="flex-1 min-w-0">
                         <div className="font-medium truncate">
                           {conv.user?.firstName && conv.user?.lastName
@@ -155,9 +371,9 @@ export default function Messages() {
                         </div>
                       </div>
                       {conv.unreadCount > 0 && (
-                        <div className="w-6 h-6 rounded-full bg-primary text-primary-foreground text-xs flex items-center justify-center">
+                        <Badge variant="default" className="min-w-[24px] h-6 rounded-full flex items-center justify-center">
                           {conv.unreadCount}
-                        </div>
+                        </Badge>
                       )}
                     </div>
                   </button>
@@ -182,34 +398,95 @@ export default function Messages() {
               </div>
             ) : (
               <>
-                {/* Chat Header */}
-                <div className="p-4 border-b border-card-border flex items-center gap-3">
+                {/* Chat Header - Compact with one-handed operation */}
+                <div className="p-3 border-b border-card-border flex items-center gap-3 min-h-[64px]">
                   <Button
                     variant="ghost"
                     size="icon"
                     onClick={() => setSelectedConversation(null)}
-                    className="md:hidden"
+                    className="md:hidden min-h-[44px] min-w-[44px]"
+                    data-testid="button-back-to-conversations"
                   >
-                    ←
+                    <ArrowLeft className="h-5 w-5" />
                   </Button>
                   {selectedUser && (
                     <>
-                      <Avatar>
-                        <AvatarImage src={selectedUser.profileImageUrl || undefined} />
-                        <AvatarFallback>
-                          {selectedUser.firstName?.[0] || selectedUser.email?.[0] || "U"}
-                        </AvatarFallback>
-                      </Avatar>
-                      <div>
-                        <div className="font-semibold">
+                      <div className="relative">
+                        <Avatar className="h-10 w-10">
+                          <AvatarImage src={selectedUser.profileImageUrl || undefined} />
+                          <AvatarFallback>
+                            {selectedUser.firstName?.[0] || selectedUser.email?.[0] || "U"}
+                          </AvatarFallback>
+                        </Avatar>
+                        {isUserOnline && (
+                          <div className="absolute bottom-0 right-0 w-3 h-3 bg-green-500 border-2 border-background rounded-full" />
+                        )}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="font-semibold text-sm truncate">
                           {selectedUser.firstName && selectedUser.lastName
                             ? `${selectedUser.firstName} ${selectedUser.lastName}`
                             : selectedUser.email}
                         </div>
+                        <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                          {selectedUser.rating !== null && selectedUser.rating !== undefined && (
+                            <div className="flex items-center gap-0.5">
+                              <Star className="h-3 w-3 fill-yellow-500 text-yellow-500" />
+                              <span>{Number(selectedUser.rating).toFixed(1)}</span>
+                            </div>
+                          )}
+                          {isUserOnline ? (
+                            <span className="text-green-500">● Online</span>
+                          ) : (
+                            <span>Offline</span>
+                          )}
+                        </div>
                       </div>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="hidden md:flex"
+                        data-testid="button-view-trip"
+                      >
+                        View Trip
+                      </Button>
                     </>
                   )}
                 </div>
+
+                {/* Trip Details - Collapsible */}
+                {selectedUser && (
+                  <div className="border-b border-card-border">
+                    <button
+                      onClick={() => setIsTripDetailsOpen(!isTripDetailsOpen)}
+                      className="w-full p-3 flex items-center justify-between hover-elevate min-h-[44px]"
+                      data-testid="button-toggle-trip-details"
+                    >
+                      <span className="text-sm font-medium">Trip Details</span>
+                      {isTripDetailsOpen ? (
+                        <ChevronUp className="h-4 w-4" />
+                      ) : (
+                        <ChevronDown className="h-4 w-4" />
+                      )}
+                    </button>
+                    {isTripDetailsOpen && (
+                      <div className="p-4 bg-muted/50 space-y-2 text-sm">
+                        <div className="flex items-center gap-2">
+                          <MapPin className="h-4 w-4 text-muted-foreground" />
+                          <span>Route details will appear here</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Calendar className="h-4 w-4 text-muted-foreground" />
+                          <span>Travel dates will appear here</span>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <Weight className="h-4 w-4 text-muted-foreground" />
+                          <span>Capacity details will appear here</span>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
 
                 {/* Messages */}
                 <div className="flex-1 overflow-y-auto p-4 space-y-4">
@@ -225,7 +502,7 @@ export default function Messages() {
                       >
                         <div
                           className={cn(
-                            "max-w-[70%] rounded-2xl px-4 py-2",
+                            "max-w-[85%] md:max-w-[70%] rounded-2xl px-4 py-2",
                             isOwnMessage
                               ? "bg-primary text-primary-foreground rounded-br-sm"
                               : "bg-muted rounded-bl-sm"
@@ -236,46 +513,72 @@ export default function Messages() {
                           </p>
                           <div
                             className={cn(
-                              "text-xs mt-1",
+                              "text-xs mt-1 flex items-center gap-1 justify-end",
                               isOwnMessage
                                 ? "text-primary-foreground/70"
                                 : "text-muted-foreground"
                             )}
                           >
-                            {new Date(msg.createdAt!).toLocaleTimeString("fr-FR", {
-                              hour: "2-digit",
-                              minute: "2-digit",
-                            })}
+                            <span>
+                              {msg.createdAt && format(new Date(msg.createdAt), "HH:mm")}
+                            </span>
+                            {isOwnMessage && getMessageStatusIcon(msg.status)}
                           </div>
                         </div>
                       </div>
                     );
                   })}
+                  
+                  {/* Typing indicator */}
+                  {isOtherUserTyping && (
+                    <div className="flex justify-start">
+                      <div className="bg-muted rounded-2xl px-4 py-2 rounded-bl-sm">
+                        <div className="flex items-center gap-1">
+                          <div className="w-2 h-2 bg-muted-foreground rounded-full animate-bounce" style={{ animationDelay: "0ms" }} />
+                          <div className="w-2 h-2 bg-muted-foreground rounded-full animate-bounce" style={{ animationDelay: "150ms" }} />
+                          <div className="w-2 h-2 bg-muted-foreground rounded-full animate-bounce" style={{ animationDelay: "300ms" }} />
+                        </div>
+                      </div>
+                    </div>
+                  )}
                   <div ref={messagesEndRef} />
                 </div>
 
-                {/* Message Input */}
-                <div className="p-4 border-t border-card-border">
-                  <div className="flex gap-2">
+                {/* Message Input - Sticky compose bar with 44px+ tap targets */}
+                <div className="p-3 border-t border-card-border bg-background sticky bottom-0">
+                  <div className="flex gap-2 items-end">
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      className="min-h-[44px] min-w-[44px] shrink-0"
+                      data-testid="button-attach-file"
+                    >
+                      <Paperclip className="h-5 w-5" />
+                    </Button>
                     <Input
                       placeholder="Type a message..."
                       value={messageInput}
-                      onChange={(e) => setMessageInput(e.target.value)}
+                      onChange={(e) => {
+                        setMessageInput(e.target.value);
+                        handleTyping();
+                      }}
                       onKeyDown={(e) => {
                         if (e.key === "Enter" && !e.shiftKey) {
                           e.preventDefault();
                           sendMessage();
                         }
                       }}
+                      className="min-h-[44px]"
                       data-testid="input-message"
                     />
                     <Button
                       size="icon"
                       onClick={sendMessage}
                       disabled={!messageInput.trim()}
+                      className="min-h-[44px] min-w-[44px] shrink-0"
                       data-testid="button-send-message"
                     >
-                      <Send className="h-4 w-4" />
+                      <Send className="h-5 w-5" />
                     </Button>
                   </div>
                 </div>

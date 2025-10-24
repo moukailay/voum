@@ -786,6 +786,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
               JSON.stringify({
                 type: "error",
                 message: "Cannot send message to blocked user",
+                clientMessageId: message.clientMessageId,
               })
             );
             return;
@@ -798,6 +799,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
               JSON.stringify({
                 type: "error",
                 message: "Message blocked due to inappropriate content",
+                clientMessageId: message.clientMessageId,
               })
             );
             return;
@@ -829,12 +831,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
             bookingId: message.bookingId || null,
           });
 
-          // Send delivery confirmation to sender
+          // Send delivery confirmation to sender (echo back clientMessageId)
           ws.send(
             JSON.stringify({
               type: "message_sent",
               message: newMessage,
               status: "sent",
+              clientMessageId: message.clientMessageId,
             })
           );
 

@@ -316,6 +316,15 @@ export default function Messages() {
     };
   };
 
+  // Handle file upload errors
+  const handleUploadError = (error: { type: string; message: string; file?: any }) => {
+    toast({
+      title: "Erreur de téléversement",
+      description: error.message,
+      variant: "destructive",
+    });
+  };
+
   // Handle file upload completion
   const handleUploadComplete = (result: UploadResult<Record<string, unknown>, Record<string, unknown>>) => {
     const successful = result.successful || [];
@@ -762,6 +771,7 @@ export default function Messages() {
                           uploadType="image"
                           onGetUploadParameters={getUploadParameters}
                           onComplete={handleUploadComplete}
+                          onError={handleUploadError}
                           buttonVariant="ghost"
                           buttonClassName="min-h-[44px] min-w-[44px] shrink-0"
                         >

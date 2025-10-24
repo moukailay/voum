@@ -18,6 +18,7 @@ interface ObjectUploaderProps {
   onComplete?: (
     result: UploadResult<Record<string, unknown>, Record<string, unknown>>
   ) => void;
+  onError?: (error: { type: string; message: string; file?: any }) => void;
   buttonClassName?: string;
   buttonVariant?: "default" | "outline" | "ghost" | "destructive" | "secondary";
   children: ReactNode;
@@ -61,6 +62,7 @@ export function ObjectUploader({
   uploadType = "image",
   onGetUploadParameters,
   onComplete,
+  onError,
   buttonClassName,
   buttonVariant = "outline",
   children,
@@ -90,6 +92,30 @@ export function ObjectUploader({
       .on("complete", (result) => {
         onComplete?.(result);
         setShowModal(false);
+      })
+      .on("restriction-failed", (file, error) => {
+        let errorType = "restriction";
+        let errorMessage = error.message;
+        
+        if (error.message.includes("exceeds maximum allowed size")) {
+          errorType = "file_too_large";
+          errorMessage = `Le fichier "${file?.name}" est trop volumineux. Maximum : ${(finalMaxFileSize / 1024 / 1024).toFixed(1)} MB`;
+        } else if (error.message.includes("You can only upload")) {
+          errorType = "file_type_invalid";
+          errorMessage = `Le type de fichier "${file?.type}" n'est pas autorisé`;
+        } else if (error.message.includes("many files")) {
+          errorType = "too_many_files";
+          errorMessage = `Vous ne pouvez pas ajouter plus de ${maxNumberOfFiles} fichier(s)`;
+        }
+        
+        onError?.({ type: errorType, message: errorMessage, file });
+      })
+      .on("upload-error", (file, error: any) => {
+        onError?.({
+          type: "upload_error",
+          message: `Échec du téléversement de "${file?.name}". Vérifiez votre connexion et réessayez.`,
+          file,
+        });
       })
   );
 

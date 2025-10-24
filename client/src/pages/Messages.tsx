@@ -608,9 +608,79 @@ export default function Messages() {
                               : "bg-muted rounded-bl-sm"
                           )}
                         >
-                          <p className="text-sm whitespace-pre-wrap break-words">
-                            {msg.content}
-                          </p>
+                          {msg.content && (
+                            <p className="text-sm whitespace-pre-wrap break-words">
+                              {msg.content}
+                            </p>
+                          )}
+                          
+                          {/* Message attachments */}
+                          {msg.attachments && msg.attachments.length > 0 && (
+                            <div className={cn("space-y-2", msg.content && "mt-2")}>
+                              {msg.attachments.map((attachment: any) => {
+                                const fileType = attachment.fileType || attachment.type;
+                                const fileName = attachment.fileName || attachment.name;
+                                const fileSize = attachment.fileSize || attachment.size;
+                                const isImage = fileType?.startsWith("image/");
+                                return (
+                                  <div
+                                    key={attachment.id}
+                                    className={cn(
+                                      "rounded-md overflow-hidden",
+                                      isImage && "max-w-[250px]"
+                                    )}
+                                    data-testid={`attachment-${attachment.id}`}
+                                  >
+                                    {isImage ? (
+                                      <a
+                                        href={attachment.url}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="block hover:opacity-90 transition-opacity"
+                                        data-testid={`link-image-${attachment.id}`}
+                                      >
+                                        <img
+                                          src={attachment.thumbnailUrl || attachment.url}
+                                          alt={fileName}
+                                          className="w-full h-auto rounded-md"
+                                        />
+                                      </a>
+                                    ) : (
+                                      <a
+                                        href={attachment.url}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        download={fileName}
+                                        className={cn(
+                                          "flex items-center gap-2 p-2 rounded-md border hover:opacity-80 transition-opacity",
+                                          isOwnMessage
+                                            ? "border-primary-foreground/20 bg-primary-foreground/10"
+                                            : "border-card-border bg-card"
+                                        )}
+                                        data-testid={`link-document-${attachment.id}`}
+                                      >
+                                        <FileText className="h-5 w-5 shrink-0" />
+                                        <div className="flex-1 min-w-0">
+                                          <p className="text-xs font-medium truncate">
+                                            {fileName}
+                                          </p>
+                                          <p className={cn(
+                                            "text-xs",
+                                            isOwnMessage
+                                              ? "text-primary-foreground/70"
+                                              : "text-muted-foreground"
+                                          )}>
+                                            {((fileSize || 0) / 1024).toFixed(1)} KB
+                                          </p>
+                                        </div>
+                                      </a>
+                                    )}
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                          
                           <div
                             className={cn(
                               "text-xs mt-1 flex items-center gap-1 justify-end",

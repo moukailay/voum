@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Send, MessageCircle, Star, ArrowLeft, Paperclip, ChevronDown, ChevronUp, Package, MapPin, Calendar, Weight, X, FileText, Image as ImageIcon } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
@@ -249,8 +250,12 @@ export default function Messages() {
     }, 3000);
   };
 
+  const MAX_MESSAGE_LENGTH = 2000;
+  const isMessageTooLong = messageInput.length > MAX_MESSAGE_LENGTH;
+  const isMessageValid = (messageInput.trim() || attachedFiles.length > 0) && !isMessageTooLong;
+
   const sendMessage = () => {
-    if ((!messageInput.trim() && attachedFiles.length === 0) || !selectedConversation || !wsRef.current) return;
+    if (!isMessageValid || !selectedConversation || !wsRef.current) return;
 
     const tempId = `temp-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
     const tempMessage: MessageWithUsers = {
@@ -702,26 +707,45 @@ export default function Messages() {
                           <Paperclip className="h-5 w-5" />
                         </Button>
                       )}
-                      <Input
-                        placeholder="Écrivez un message..."
-                        value={messageInput}
-                        onChange={(e) => {
-                          setMessageInput(e.target.value);
-                          handleTyping();
-                        }}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter" && !e.shiftKey) {
-                            e.preventDefault();
-                            sendMessage();
-                          }
-                        }}
-                        className="min-h-[44px]"
-                        data-testid="input-message"
-                      />
+                      <div className="flex-1">
+                        <div className="relative">
+                          <Textarea
+                            placeholder="Écrivez un message..."
+                            value={messageInput}
+                            onChange={(e) => {
+                              setMessageInput(e.target.value);
+                              handleTyping();
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter" && !e.shiftKey) {
+                                e.preventDefault();
+                                sendMessage();
+                              }
+                            }}
+                            className={cn(
+                              "min-h-[44px] max-h-[120px] resize-none",
+                              isMessageTooLong && "border-destructive focus-visible:ring-destructive"
+                            )}
+                            rows={1}
+                            data-testid="input-message"
+                          />
+                          <div className={cn(
+                            "absolute bottom-1 right-2 text-xs",
+                            isMessageTooLong ? "text-destructive font-semibold" : "text-muted-foreground"
+                          )}>
+                            {messageInput.length}/{MAX_MESSAGE_LENGTH}
+                          </div>
+                        </div>
+                        {isMessageTooLong && (
+                          <p className="text-xs text-destructive mt-1" data-testid="text-error-message-too-long">
+                            Votre message est trop long. Maximum {MAX_MESSAGE_LENGTH} caractères.
+                          </p>
+                        )}
+                      </div>
                       <Button
                         size="icon"
                         onClick={sendMessage}
-                        disabled={!messageInput.trim() && attachedFiles.length === 0}
+                        disabled={!isMessageValid}
                         className="min-h-[44px] min-w-[44px] shrink-0"
                         data-testid="button-send-message"
                       >

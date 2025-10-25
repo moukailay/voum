@@ -8,6 +8,24 @@ Preferred communication style: Simple, everyday language.
 
 ## Recent Changes (October 25, 2025)
 
+### Appointment Management System (In Progress - Bug Found)
+- **Goal:** Allow senders to specify pickup/delivery appointments when booking, with confirmation requirements before PIN validation.
+- **Backend Completed:**
+  - **Schema:** Added appointment fields to bookings table (pickupLocation, pickupDateTime, deliveryLocation, deliveryDateTime, pickupConfirmedAt, deliveryConfirmedAt, appointmentHistory jsonb)
+  - **Storage:** Methods confirmPickupAppointment, confirmDeliveryAppointment, updateBookingAppointment with automatic history tracking
+  - **API:** POST /api/bookings (accepts appointment fields), PATCH /api/bookings/:id/appointment, POST /api/bookings/:id/confirm-pickup, POST /api/bookings/:id/confirm-delivery
+  - **Validation:** Dates must be within trip departure/arrival window, delivery ≥ pickup, server-side enforcement
+  - **PIN Blocking:** Verify-pin endpoint rejects attempts if appointments exist but not confirmed
+- **Frontend Completed:**
+  - **DateTimePicker Component:** Mobile-optimized component with Calendar popover and time selection (h-11 inputs, ≥44px touch targets)
+  - **TripDetails Form:** Extended booking form with pickup appointment (required: location + datetime) and delivery appointment (optional)
+  - **BookingDetails Display:** Appointment cards with Google Maps links, countdown (J-x), confirmation buttons (sender for pickup, traveler for delivery), status badges
+  - **Appointment History:** Collapsible section showing chronological modification log with translated labels (L'expéditeur, Le voyageur) and formatted timestamps
+  - **PIN Blocking UI:** Inline warning with disabled PIN buttons when appointments not confirmed
+- **Architect Review:** Passed - No security violations, data integrity sound, UX coherent
+- **Known Bug:** Booking form submission silently fails (no POST /api/bookings, no error display). Form schema uses insertBookingSchema.omit().extend() pattern but validation may be blocking onSubmit. Debug UI added to display form.formState.errors. Needs investigation of Zod schema type conflicts between base insertBookingSchema (timestamp fields) and extended Date requirements.
+- **Next Steps:** Fix form validation bug, complete E2E testing, implement automated T-24h/T-2h appointment reminders (cron jobs).
+
 ### Traveler Booking Management System
 - **Problem:** Travelers (mikhail09ther@gmail.com example) could create trips and see them booked, but had no way to access booking details or validate PIN codes for delivery confirmation.
 - **Solution:**

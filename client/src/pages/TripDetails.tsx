@@ -56,26 +56,34 @@ interface BookingWithSender extends Booking {
 }
 
 // Extended booking schema with appointment validation
-const bookingFormSchema = insertBookingSchema.extend({
-  pickupLocation: z.string().min(1, "Le lieu de remise est requis"),
-  pickupDateTime: z.date({
-    required_error: "La date de remise est requise",
-  }),
-  deliveryLocation: z.string().optional(),
-  deliveryDateTime: z.date().optional().nullable(),
-}).refine(
-  (data) => {
-    // If delivery datetime is provided, delivery location must be provided
-    if (data.deliveryDateTime && !data.deliveryLocation) {
-      return false;
+const bookingFormSchema = insertBookingSchema
+  .omit({
+    pickupLocation: true,
+    pickupDateTime: true,
+    deliveryLocation: true,
+    deliveryDateTime: true,
+  })
+  .extend({
+    pickupLocation: z.string().min(1, "Le lieu de remise est requis"),
+    pickupDateTime: z.date({
+      required_error: "La date de remise est requise",
+    }),
+    deliveryLocation: z.string().optional(),
+    deliveryDateTime: z.date().optional().nullable(),
+  })
+  .refine(
+    (data) => {
+      // If delivery datetime is provided, delivery location must be provided
+      if (data.deliveryDateTime && !data.deliveryLocation) {
+        return false;
+      }
+      return true;
+    },
+    {
+      message: "Le lieu de livraison est requis si vous spécifiez une date de livraison",
+      path: ["deliveryLocation"],
     }
-    return true;
-  },
-  {
-    message: "Le lieu de livraison est requis si vous spécifiez une date de livraison",
-    path: ["deliveryLocation"],
-  }
-);
+  );
 
 type BookingFormData = z.infer<typeof bookingFormSchema>;
 
@@ -187,6 +195,9 @@ export default function TripDetails() {
   });
 
   const onSubmit = (data: BookingFormData) => {
+    console.log("onSubmit called with data:", data);
+    console.log("Form errors:", form.formState.errors);
+    
     // Additional validation: dates must be between trip dates
     if (trip) {
       const departureDate = new Date(trip.departureDate);
@@ -216,6 +227,7 @@ export default function TripDetails() {
       }
     }
 
+    console.log("Calling mutation with data");
     bookingMutation.mutate(data);
   };
 
@@ -739,6 +751,22 @@ export default function TripDetails() {
                     <p className="text-xs text-muted-foreground mt-2">
                       {weight}kg × {Number(trip.pricePerKg).toFixed(2)}€/kg
                     </p>
+                  </div>
+                )}
+
+                {/* Debug: Form Errors */}
+                {Object.keys(form.formState.errors).length > 0 && (
+                  <div className="p-4 bg-destructive/10 border border-destructive rounded-lg">
+                    <div className="text-sm font-medium text-destructive mb-2">
+                      Erreurs de formulaire :
+                    </div>
+                    <div className="text-xs space-y-1">
+                      {Object.entries(form.formState.errors).map(([key, error]) => (
+                        <div key={key}>
+                          <strong>{key}:</strong> {error?.message?.toString()}
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 )}
 

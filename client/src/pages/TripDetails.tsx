@@ -55,35 +55,33 @@ interface BookingWithSender extends Booking {
   sender?: User;
 }
 
-// Extended booking schema with appointment validation
-const bookingFormSchema = insertBookingSchema
-  .omit({
-    pickupLocation: true,
-    pickupDateTime: true,
-    deliveryLocation: true,
-    deliveryDateTime: true,
-  })
-  .extend({
-    pickupLocation: z.string().min(1, "Le lieu de remise est requis"),
-    pickupDateTime: z.date({
-      required_error: "La date de remise est requise",
-    }),
-    deliveryLocation: z.string().optional(),
-    deliveryDateTime: z.date().optional().nullable(),
-  })
-  .refine(
-    (data) => {
-      // If delivery datetime is provided, delivery location must be provided
-      if (data.deliveryDateTime && !data.deliveryLocation) {
-        return false;
-      }
-      return true;
-    },
-    {
-      message: "Le lieu de livraison est requis si vous spécifiez une date de livraison",
-      path: ["deliveryLocation"],
+// Frontend-only booking schema for the form (uses Date objects)
+const bookingFormSchema = z.object({
+  tripId: z.string(),
+  weight: z.string().min(1, "Le poids est requis"),
+  description: z.string().optional(),
+  senderName: z.string().min(1, "Votre nom est requis"),
+  senderPhone: z.string().min(1, "Votre téléphone est requis"),
+  price: z.string(),
+  pickupLocation: z.string().min(1, "Le lieu de remise est requis"),
+  pickupDateTime: z.date({
+    required_error: "La date de remise est requise",
+  }),
+  deliveryLocation: z.string().optional(),
+  deliveryDateTime: z.date().optional().nullable(),
+}).refine(
+  (data) => {
+    // If delivery datetime is provided, delivery location must be provided
+    if (data.deliveryDateTime && !data.deliveryLocation) {
+      return false;
     }
-  );
+    return true;
+  },
+  {
+    message: "Le lieu de livraison est requis si vous spécifiez une date de livraison",
+    path: ["deliveryLocation"],
+  }
+);
 
 type BookingFormData = z.infer<typeof bookingFormSchema>;
 

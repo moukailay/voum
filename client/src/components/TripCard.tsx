@@ -23,40 +23,47 @@ export function TripCard({ trip, traveler }: TripCardProps) {
   return (
     <Link href={`/trips/${trip.id}`}>
       <Card
-        className="p-4 md:p-6 hover-elevate cursor-pointer transition-all"
+        className="p-4 md:p-6 hover-elevate cursor-pointer transition-all min-h-[200px]"
         data-testid={`card-trip-${trip.id}`}
       >
-        <div className="space-y-4">
-          {/* Route */}
-          <div className="flex items-center gap-3">
-            <div className="flex-1">
-              <div className="flex items-center gap-2 text-base font-semibold">
-                <MapPin className="h-4 w-4 text-primary flex-shrink-0" />
-                <span className="truncate">{trip.departureCity}</span>
+        <div className="space-y-3 md:space-y-4">
+          {/* Route and Price */}
+          <div className="flex items-start gap-3">
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2 mb-1">
+                <MapPin className="h-5 w-5 text-primary flex-shrink-0" />
+                <span className="font-semibold text-base md:text-lg truncate">
+                  {trip.departureCity}
+                </span>
               </div>
-              <div className="flex items-center gap-2 text-sm text-muted-foreground mt-1">
-                <MapPin className="h-4 w-4 flex-shrink-0 opacity-0" />
-                <span className="truncate">{trip.destinationCity}</span>
+              <div className="flex items-center gap-2 text-muted-foreground">
+                <span className="h-5 w-5 flex items-center justify-center flex-shrink-0">→</span>
+                <span className="text-sm md:text-base truncate">
+                  {trip.destinationCity}
+                </span>
               </div>
             </div>
 
-            <div className="flex flex-col items-end gap-1">
-              <div className="text-xl font-bold text-primary">
-                {Number(trip.pricePerKg).toFixed(2)}€/kg
+            <div className="flex flex-col items-end gap-0.5 flex-shrink-0">
+              <div className="text-xl md:text-2xl font-bold text-primary whitespace-nowrap">
+                {Number(trip.pricePerKg).toFixed(2)}€
               </div>
-              <div className="flex items-center gap-1 text-xs text-muted-foreground">
-                <Weight className="h-3 w-3" />
-                <span>{Number(trip.availableWeight).toFixed(1)}kg</span>
-              </div>
+              <div className="text-xs text-muted-foreground">per kg</div>
             </div>
           </div>
 
-          {/* Dates */}
-          <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Calendar className="h-4 w-4" />
-            <span>
-              {departureDate} - {arrivalDate}
-            </span>
+          {/* Dates and Weight */}
+          <div className="flex items-center justify-between gap-4 text-sm">
+            <div className="flex items-center gap-2 text-muted-foreground flex-1 min-w-0">
+              <Calendar className="h-4 w-4 flex-shrink-0" />
+              <span className="truncate">
+                {departureDate} - {arrivalDate}
+              </span>
+            </div>
+            <div className="flex items-center gap-1.5 text-muted-foreground flex-shrink-0">
+              <Weight className="h-4 w-4" />
+              <span className="font-medium">{Number(trip.availableWeight).toFixed(1)}kg</span>
+            </div>
           </div>
 
           {/* Status Badge */}
@@ -68,10 +75,10 @@ export function TripCard({ trip, traveler }: TripCardProps) {
 
           {/* Traveler Info */}
           {traveler && (
-            <div className="flex items-center gap-3 pt-2 border-t border-card-border">
-              <Avatar className="h-10 w-10">
+            <div className="flex items-center gap-3 pt-3 border-t border-card-border">
+              <Avatar className="h-10 w-10 flex-shrink-0">
                 <AvatarImage src={traveler.profileImageUrl || undefined} />
-                <AvatarFallback>
+                <AvatarFallback className="text-sm">
                   {traveler.firstName?.[0] || traveler.email?.[0] || "U"}
                 </AvatarFallback>
               </Avatar>
@@ -82,10 +89,11 @@ export function TripCard({ trip, traveler }: TripCardProps) {
                     : traveler.email}
                 </div>
                 <div className="flex items-center gap-1 text-xs text-muted-foreground">
-                  <Star className="h-3 w-3 fill-amber-400 text-amber-400" />
+                  <Star className="h-3.5 w-3.5 fill-amber-400 text-amber-400 flex-shrink-0" />
                   <span>{Number(traveler.rating || 0).toFixed(1)}</span>
-                  <span className="ml-1">
-                    ({traveler.totalTripsAsTravel || 0} trips)
+                  <span className="mx-0.5">·</span>
+                  <span className="truncate">
+                    {traveler.totalTripsAsTravel || 0} {(traveler.totalTripsAsTravel || 0) === 1 ? 'trip' : 'trips'}
                   </span>
                 </div>
               </div>

@@ -193,39 +193,7 @@ export default function TripDetails() {
   });
 
   const onSubmit = (data: BookingFormData) => {
-    console.log("onSubmit called with data:", data);
-    console.log("Form errors:", form.formState.errors);
-    
-    // Additional validation: dates must be between trip dates
-    if (trip) {
-      const departureDate = new Date(trip.departureDate);
-      const arrivalDate = new Date(trip.arrivalDate);
-
-      if (data.pickupDateTime < departureDate || data.pickupDateTime > arrivalDate) {
-        form.setError("pickupDateTime", {
-          message: "La date de remise doit être entre la date de départ et d'arrivée du voyage",
-        });
-        return;
-      }
-
-      if (data.deliveryDateTime) {
-        if (data.deliveryDateTime < departureDate || data.deliveryDateTime > arrivalDate) {
-          form.setError("deliveryDateTime", {
-            message: "La date de livraison doit être entre la date de départ et d'arrivée du voyage",
-          });
-          return;
-        }
-
-        if (data.deliveryDateTime < data.pickupDateTime) {
-          form.setError("deliveryDateTime", {
-            message: "La date de livraison doit être après la date de remise",
-          });
-          return;
-        }
-      }
-    }
-
-    console.log("Calling mutation with data");
+    // Server will validate dates, so we skip client-side validation to avoid timezone issues
     bookingMutation.mutate(data);
   };
 
@@ -749,22 +717,6 @@ export default function TripDetails() {
                     <p className="text-xs text-muted-foreground mt-2">
                       {weight}kg × {Number(trip.pricePerKg).toFixed(2)}€/kg
                     </p>
-                  </div>
-                )}
-
-                {/* Debug: Form Errors */}
-                {Object.keys(form.formState.errors).length > 0 && (
-                  <div className="p-4 bg-destructive/10 border border-destructive rounded-lg">
-                    <div className="text-sm font-medium text-destructive mb-2">
-                      Erreurs de formulaire :
-                    </div>
-                    <div className="text-xs space-y-1">
-                      {Object.entries(form.formState.errors).map(([key, error]) => (
-                        <div key={key}>
-                          <strong>{key}:</strong> {error?.message?.toString()}
-                        </div>
-                      ))}
-                    </div>
                   </div>
                 )}
 

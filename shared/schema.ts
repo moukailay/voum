@@ -129,7 +129,11 @@ export const bookings = pgTable("bookings", {
   updatedAt: timestamp("updated_at").defaultNow(),
 });
 
-export const insertBookingSchema = createInsertSchema(bookings).omit({
+export const insertBookingSchema = createInsertSchema(bookings, {
+  // Use coerce to accept both Date objects and ISO strings
+  pickupDateTime: z.coerce.date().optional(),
+  deliveryDateTime: z.coerce.date().optional(),
+}).omit({
   id: true,
   createdAt: true,
   updatedAt: true,

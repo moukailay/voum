@@ -107,8 +107,19 @@ export function DateTimePicker({
               selected={value}
               onSelect={handleDateSelect}
               disabled={(date) => {
-                if (minDate && date < minDate) return true;
-                if (maxDate && date > maxDate) return true;
+                // Compare only the date part (ignore time) to avoid timezone issues
+                const dateOnly = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+                
+                if (minDate) {
+                  const minDateOnly = new Date(minDate.getFullYear(), minDate.getMonth(), minDate.getDate());
+                  if (dateOnly < minDateOnly) return true;
+                }
+                
+                if (maxDate) {
+                  const maxDateOnly = new Date(maxDate.getFullYear(), maxDate.getMonth(), maxDate.getDate());
+                  if (dateOnly > maxDateOnly) return true;
+                }
+                
                 return false;
               }}
               initialFocus

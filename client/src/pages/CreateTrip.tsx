@@ -29,11 +29,12 @@ const formSchema = insertTripSchema
     arrivalDate: true,
     availableWeight: true,
     pricePerKg: true,
+    maxWeight: true,
   })
   .extend({
     departureDate: z.string().min(1, "Departure date is required"),
     arrivalDate: z.string().min(1, "Arrival date is required"),
-    availableWeight: z.string().min(1, "Available weight is required"),
+    maxWeight: z.string().min(1, "Maximum weight is required"),
     pricePerKg: z.string().min(1, "Price per kg is required"),
   });
 
@@ -50,7 +51,7 @@ export default function CreateTrip() {
       destinationCity: "",
       departureDate: "",
       arrivalDate: "",
-      availableWeight: "",
+      maxWeight: "",
       pricePerKg: "",
       maxDimensions: "",
       acceptedItems: "",
@@ -65,8 +66,8 @@ export default function CreateTrip() {
         destinationCity: data.destinationCity,
         departureDate: new Date(data.departureDate).toISOString(),
         arrivalDate: new Date(data.arrivalDate).toISOString(),
-        availableWeight: data.availableWeight,
-        pricePerKg: data.pricePerKg,
+        maxWeight: Number(data.maxWeight),
+        pricePerKg: Number(data.pricePerKg),
         maxDimensions: data.maxDimensions || null,
         acceptedItems: data.acceptedItems || null,
         restrictedItems: data.restrictedItems || null,
@@ -216,10 +217,10 @@ export default function CreateTrip() {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
                 <FormField
                   control={form.control}
-                  name="availableWeight"
+                  name="maxWeight"
                   render={({ field }) => (
                     <FormItem>
-                      <FormLabel>Available Weight (kg)</FormLabel>
+                      <FormLabel>Maximum Weight (kg)</FormLabel>
                       <FormControl>
                         <Input
                           type="number"

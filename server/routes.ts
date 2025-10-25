@@ -21,16 +21,20 @@ import { filterContent, shouldBlockContent } from "./contentFilter";
 import { db } from "./db";
 import { eq } from "drizzle-orm";
 
-// Create API schemas that accept date strings
+// Create API schemas that accept date strings and coerce numbers
 const createTripSchema = insertTripSchema
   .omit({
     departureDate: true,
     arrivalDate: true,
     availableWeight: true, // Will be set equal to maxWeight automatically
+    maxWeight: true,
+    pricePerKg: true,
   })
   .extend({
     departureDate: z.string().transform((val) => new Date(val)),
     arrivalDate: z.string().transform((val) => new Date(val)),
+    maxWeight: z.coerce.number().positive("Maximum weight must be positive"),
+    pricePerKg: z.coerce.number().positive("Price per kg must be positive"),
   });
 
 // WebSocket client tracking

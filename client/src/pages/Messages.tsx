@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { useLocation } from "wouter";
 import { Send, MessageCircle, Star, ArrowLeft, Paperclip, ChevronDown, ChevronUp, Package, MapPin, Calendar, Weight, X, FileText, Image as ImageIcon } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -50,6 +51,7 @@ interface AttachedFile {
 export default function Messages() {
   const { user } = useAuth();
   const { toast } = useToast();
+  const [location] = useLocation();
   const [selectedConversation, setSelectedConversation] = useState<string | null>(null);
   const [messageInput, setMessageInput] = useState("");
   const [messages, setMessages] = useState<MessageWithUsers[]>([]);
@@ -68,6 +70,20 @@ export default function Messages() {
   const { data: conversations } = useQuery<Conversation[]>({
     queryKey: ["/api/messages/conversations"],
   });
+
+  // Auto-select conversation from URL query parameter
+  useEffect(() => {
+    const searchParams = new URLSearchParams(location.split('?')[1] || '');
+    const userIdParam = searchParams.get('userId');
+    
+    if (userIdParam && conversations && conversations.length > 0) {
+      // Check if this user exists in conversations
+      const conversationExists = conversations.some(c => c.userId === userIdParam);
+      if (conversationExists && selectedConversation !== userIdParam) {
+        setSelectedConversation(userIdParam);
+      }
+    }
+  }, [location, conversations, selectedConversation]);
 
   // Fetch messages for selected conversation
   const { data: conversationMessages } = useQuery<MessageWithUsers[]>({

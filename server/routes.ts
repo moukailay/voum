@@ -8,6 +8,7 @@ import {
   insertBookingSchema,
   insertMessageSchema,
   insertMessageAttachmentSchema,
+  trips,
 } from "@shared/schema";
 import { z } from "zod";
 import {
@@ -17,6 +18,8 @@ import {
 import { ObjectAccessGroupType, ObjectPermission } from "./objectAcl";
 import { validateUploadedFile, validateFileMetadata } from "./fileValidator";
 import { filterContent, shouldBlockContent } from "./contentFilter";
+import { db } from "./db";
+import { eq } from "drizzle-orm";
 
 // Create API schemas that accept date strings
 const createTripSchema = insertTripSchema
@@ -192,21 +195,71 @@ export async function registerRoutes(app: Express): Promise<Server> {
         senderId: userId,
       });
 
-      const booking = await storage.createBooking(validatedData);
-
-      // Create notification for traveler
-      const trip = await storage.getTrip(booking.tripId);
-      if (trip) {
-        await storage.createNotification({
-          userId: trip.travelerId,
-          type: "booking",
-          title: "New Booking!",
-          message: `You have a new booking for ${trip.departureCity} → ${trip.destinationCity}`,
-          relatedId: booking.id,
-        });
+      // Get trip to validate weight and get traveler info
+      const trip = await storage.getTrip(validatedData.tripId);
+      if (!trip) {
+        res.status(404).json({ message: "Trip not found" });
+        return;
       }
 
-      res.json(booking);
+      // Validate available weight
+      const requestedWeight = Number(validatedData.weight);
+      const availableWeight = Number(trip.availableWeight);
+      
+      if (requestedWeight <= 0) {
+        res.status(400).json({ 
+          message: "Le poids doit être supérieur à zéro" 
+        });
+        return;
+      }
+      
+      if (requestedWeight > availableWeight) {
+        res.status(400).json({ 
+          message: `Le poids demandé (${requestedWeight}kg) dépasse le poids disponible (${availableWeight}kg)` 
+        });
+        return;
+      }
+
+      // SECURITY: Calculate price on server (never trust client-provided price)
+      const serverCalculatedPrice = (requestedWeight * Number(trip.pricePerKg)).toFixed(2);
+
+      // Create the booking with server-calculated price
+      const booking = await storage.createBooking({
+        ...validatedData,
+        price: serverCalculatedPrice,
+      });
+
+      // Update trip available weight
+      const newAvailableWeight = availableWeight - requestedWeight;
+      await db
+        .update(trips)
+        .set({ 
+          availableWeight: newAvailableWeight.toString(),
+          updatedAt: new Date() 
+        })
+        .where(eq(trips.id, trip.id));
+
+      // Create system message to start conversation
+      const systemMessage = await storage.createMessage({
+        bookingId: booking.id,
+        senderId: userId,
+        receiverId: trip.travelerId,
+        content: `Nouvelle réservation confirmée\n\nColis : ${validatedData.description || "Colis à livrer"}\nPoids : ${requestedWeight}kg\nPrix total : ${serverCalculatedPrice}€\n\nExpéditeur : ${validatedData.senderName}\nTéléphone : ${validatedData.senderPhone}\n\nVous pouvez maintenant discuter pour coordonner la livraison.`,
+      });
+
+      // Create notification for traveler
+      await storage.createNotification({
+        userId: trip.travelerId,
+        type: "booking",
+        title: "Nouvelle réservation !",
+        message: `Vous avez une nouvelle réservation pour ${trip.departureCity} → ${trip.destinationCity}`,
+        relatedId: booking.id,
+      });
+
+      res.json({ 
+        ...booking, 
+        conversationUserId: trip.travelerId 
+      });
     } catch (error: any) {
       console.error("Error creating booking:", error);
       res.status(400).json({

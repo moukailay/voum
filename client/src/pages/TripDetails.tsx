@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useRoute, useLocation } from "wouter";
 import {
@@ -45,11 +45,30 @@ export default function TripDetails() {
   const [showBookingDialog, setShowBookingDialog] = useState(false);
   const [weight, setWeight] = useState("");
   const [description, setDescription] = useState("");
+  const [senderName, setSenderName] = useState("");
+  const [senderPhone, setSenderPhone] = useState("");
+  const [errors, setErrors] = useState<{
+    weight?: string;
+    senderName?: string;
+    senderPhone?: string;
+  }>({});
 
   const { data: trip, isLoading } = useQuery<TripWithTraveler>({
     queryKey: ["/api/trips", tripId],
     enabled: !!tripId,
   });
+
+  // Pre-fill sender info when dialog opens
+  useEffect(() => {
+    if (showBookingDialog && user) {
+      if (!senderName && user.firstName && user.lastName) {
+        setSenderName(`${user.firstName} ${user.lastName}`);
+      }
+      if (!senderPhone && user.phoneNumber) {
+        setSenderPhone(user.phoneNumber);
+      }
+    }
+  }, [showBookingDialog, user, senderName, senderPhone]);
 
   const bookingMutation = useMutation({
     mutationFn: async () => {
@@ -58,18 +77,22 @@ export default function TripDetails() {
       return await apiRequest("POST", "/api/bookings", {
         tripId: trip.id,
         weight,
-        description,
+        description: description || "Colis à livrer",
+        senderName,
+        senderPhone,
         price: price.toFixed(2),
       });
     },
     onSuccess: (data: any) => {
       queryClient.invalidateQueries({ queryKey: ["/api/bookings"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/messages/conversations"] });
       toast({
-        title: "Booking successful!",
-        description: "Your parcel has been booked. Check your messages for coordination.",
+        title: "Réservation confirmée !",
+        description: "Votre colis a été réservé. Vous pouvez maintenant discuter avec le voyageur.",
       });
       setShowBookingDialog(false);
-      setLocation(`/bookings/${data.id}`);
+      // Redirect to messages with the traveler's conversation
+      setLocation(`/messages?userId=${data.conversationUserId}`);
     },
     onError: (error: Error) => {
       if (isUnauthorizedError(error)) {
@@ -91,29 +114,31 @@ export default function TripDetails() {
     },
   });
 
-  const handleBooking = () => {
+  const validateForm = () => {
+    const newErrors: typeof errors = {};
+    
     if (!weight || Number(weight) <= 0) {
-      toast({
-        title: "Invalid weight",
-        description: "Please enter a valid weight",
-        variant: "destructive",
-      });
-      return;
+      newErrors.weight = "Veuillez saisir un poids valide";
+    } else if (Number(weight) > Number(trip?.availableWeight || 0)) {
+      newErrors.weight = `Le poids maximum disponible est ${trip?.availableWeight}kg`;
     }
-    if (Number(weight) > Number(trip?.availableWeight || 0)) {
-      toast({
-        title: "Weight exceeds capacity",
-        description: `Maximum available weight is ${trip?.availableWeight}kg`,
-        variant: "destructive",
-      });
-      return;
+    
+    if (!senderName.trim()) {
+      newErrors.senderName = "Le nom est requis";
     }
-    if (!description.trim()) {
-      toast({
-        title: "Missing description",
-        description: "Please describe your parcel",
-        variant: "destructive",
-      });
+    
+    if (!senderPhone.trim()) {
+      newErrors.senderPhone = "Le téléphone est requis";
+    } else if (!/^[0-9+\s\-()]{8,}$/.test(senderPhone)) {
+      newErrors.senderPhone = "Veuillez saisir un numéro de téléphone valide";
+    }
+    
+    setErrors(newErrors);
+    return Object.keys(newErrors).length === 0;
+  };
+
+  const handleBooking = () => {
+    if (!validateForm()) {
       return;
     }
     bookingMutation.mutate();
@@ -335,37 +360,85 @@ export default function TripDetails() {
 
             <div className="space-y-4">
               <div>
-                <Label htmlFor="weight">Weight (kg)</Label>
+                <Label htmlFor="weight">Poids (kg) *</Label>
                 <Input
                   id="weight"
                   type="number"
+                  inputMode="decimal"
                   step="0.1"
-                  placeholder="e.g., 5"
+                  placeholder="Ex: 5"
                   value={weight}
-                  onChange={(e) => setWeight(e.target.value)}
+                  onChange={(e) => {
+                    setWeight(e.target.value);
+                    if (errors.weight) setErrors({ ...errors, weight: undefined });
+                  }}
                   data-testid="input-booking-weight"
+                  className={errors.weight ? "border-destructive" : ""}
                 />
-                <p className="text-xs text-muted-foreground mt-1">
-                  Max: {Number(trip.availableWeight).toFixed(1)}kg
-                </p>
+                {errors.weight ? (
+                  <p className="text-xs text-destructive mt-1">{errors.weight}</p>
+                ) : (
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Maximum : {Number(trip.availableWeight).toFixed(1)}kg
+                  </p>
+                )}
               </div>
 
               <div>
-                <Label htmlFor="description">Parcel Description</Label>
+                <Label htmlFor="senderName">Votre nom *</Label>
+                <Input
+                  id="senderName"
+                  type="text"
+                  placeholder="Ex: Jean Dupont"
+                  value={senderName}
+                  onChange={(e) => {
+                    setSenderName(e.target.value);
+                    if (errors.senderName) setErrors({ ...errors, senderName: undefined });
+                  }}
+                  data-testid="input-booking-sender-name"
+                  className={errors.senderName ? "border-destructive" : ""}
+                />
+                {errors.senderName && (
+                  <p className="text-xs text-destructive mt-1">{errors.senderName}</p>
+                )}
+              </div>
+
+              <div>
+                <Label htmlFor="senderPhone">Votre téléphone *</Label>
+                <Input
+                  id="senderPhone"
+                  type="tel"
+                  inputMode="tel"
+                  placeholder="Ex: +33 6 12 34 56 78"
+                  value={senderPhone}
+                  onChange={(e) => {
+                    setSenderPhone(e.target.value);
+                    if (errors.senderPhone) setErrors({ ...errors, senderPhone: undefined });
+                  }}
+                  data-testid="input-booking-sender-phone"
+                  className={errors.senderPhone ? "border-destructive" : ""}
+                />
+                {errors.senderPhone && (
+                  <p className="text-xs text-destructive mt-1">{errors.senderPhone}</p>
+                )}
+              </div>
+
+              <div>
+                <Label htmlFor="description">Description du colis (optionnel)</Label>
                 <Textarea
                   id="description"
-                  rows={4}
-                  placeholder="Describe what you're sending..."
+                  rows={3}
+                  placeholder="Décrivez ce que vous envoyez..."
                   value={description}
                   onChange={(e) => setDescription(e.target.value)}
                   data-testid="input-booking-description"
                 />
               </div>
 
-              {weight && (
-                <div className="p-4 bg-muted rounded-lg">
+              {weight && Number(weight) > 0 && (
+                <div className="p-4 bg-primary/5 border border-primary/20 rounded-lg">
                   <div className="flex justify-between items-center">
-                    <span className="font-medium">Total Price:</span>
+                    <span className="font-medium">Prix total :</span>
                     <span className="text-2xl font-bold text-primary">
                       {totalPrice}€
                     </span>
@@ -386,11 +459,18 @@ export default function TripDetails() {
                 </Button>
                 <Button
                   onClick={handleBooking}
-                  disabled={bookingMutation.isPending}
+                  disabled={bookingMutation.isPending || !weight || !senderName || !senderPhone}
                   className="flex-1"
                   data-testid="button-confirm-booking"
                 >
-                  {bookingMutation.isPending ? "Booking..." : "Confirm Booking"}
+                  {bookingMutation.isPending ? (
+                    <>
+                      <span className="inline-block h-4 w-4 border-2 border-current border-t-transparent rounded-full animate-spin mr-2" />
+                      Réservation...
+                    </>
+                  ) : (
+                    "Confirmer la réservation"
+                  )}
                 </Button>
               </div>
             </div>

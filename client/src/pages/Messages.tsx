@@ -73,14 +73,11 @@ export default function Messages() {
     const searchParams = new URLSearchParams(location.split('?')[1] || '');
     const userIdParam = searchParams.get('userId');
     
-    if (userIdParam && conversations && conversations.length > 0) {
-      // Check if this user exists in conversations
-      const conversationExists = conversations.some(c => c.userId === userIdParam);
-      if (conversationExists && selectedConversation !== userIdParam) {
-        setSelectedConversation(userIdParam);
-      }
+    // Select conversation even if it doesn't exist yet (allows new conversations)
+    if (userIdParam && selectedConversation !== userIdParam) {
+      setSelectedConversation(userIdParam);
     }
-  }, [location, conversations, selectedConversation]);
+  }, [location, selectedConversation]);
 
   // Fetch messages for selected conversation
   const { data: conversationMessages } = useQuery<MessageWithUsers[]>({

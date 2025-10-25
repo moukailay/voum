@@ -295,7 +295,12 @@ export default function TripDetails() {
                   </div>
 
                   {!isOwnTrip && (
-                    <Button className="w-full" variant="outline" data-testid="button-message-traveler">
+                    <Button 
+                      className="w-full" 
+                      variant="outline" 
+                      data-testid="button-message-traveler"
+                      onClick={() => setLocation(`/messages?userId=${trip.travelerId}`)}
+                    >
                       <MessageCircle className="h-4 w-4 mr-2" />
                       Message
                     </Button>

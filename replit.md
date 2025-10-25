@@ -6,6 +6,28 @@ ParcelLink is a mobile-first web application that facilitates peer-to-peer parce
 ## User Preferences
 Preferred communication style: Simple, everyday language.
 
+## Recent Changes (October 25, 2025)
+
+### Messaging Navigation Fix
+- **Problem:** Message button in TripDetails created empty conversations instead of pre-selecting the correct conversation.
+- **Solution:** 
+  - TripDetails now navigates to `/messages?userId=xxx` instead of creating a conversation
+  - Messages page parses `window.location.search` (not wouter's `location`) to auto-select conversation
+  - Conditional fetch of `/api/users/:userId` for new conversation context
+  - Added GET `/api/users/:userId` route for user data retrieval
+- **Impact:** Users can now seamlessly message travelers from trip details pages.
+
+### Object Storage Configuration
+- **Setup:** Configured Replit Object Storage bucket for file uploads in messaging
+- **Bucket:** repl-default-bucket-de357f19-89ae-432b-b932-36f4b0ba15d6
+- **Environment Variables:** PRIVATE_OBJECT_DIR, PUBLIC_OBJECT_SEARCH_PATHS, DEFAULT_OBJECT_STORAGE_BUCKET_ID
+- **Impact:** File attachments (images, PDFs) now upload successfully with previews.
+
+### Composition Bar Improvements
+- **Accessibility:** Added ARIA labels for attach/send buttons, focus visible states
+- **Mobile-first:** Touch targets ≥44px, text-base 16px, responsive 320-375px tested
+- **Upload UX:** Hidden file input, inline previews, parallel upload, error toasts
+
 ## System Architecture
 
 ### Frontend

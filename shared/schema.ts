@@ -60,6 +60,7 @@ export const trips = pgTable("trips", {
   destinationCity: varchar("destination_city").notNull(),
   departureDate: timestamp("departure_date").notNull(),
   arrivalDate: timestamp("arrival_date").notNull(),
+  maxWeight: decimal("max_weight", { precision: 6, scale: 2 }).notNull(),
   availableWeight: decimal("available_weight", { precision: 6, scale: 2 }).notNull(),
   pricePerKg: decimal("price_per_kg", { precision: 8, scale: 2 }).notNull(),
   maxDimensions: varchar("max_dimensions"), // e.g., "50x40x30 cm"

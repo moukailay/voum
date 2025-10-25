@@ -26,6 +26,7 @@ const createTripSchema = insertTripSchema
   .omit({
     departureDate: true,
     arrivalDate: true,
+    availableWeight: true, // Will be set equal to maxWeight automatically
   })
   .extend({
     departureDate: z.string().transform((val) => new Date(val)),
@@ -101,7 +102,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         travelerId: userId,
       });
 
-      const trip = await storage.createTrip(validatedData);
+      // Initialize availableWeight to maxWeight when creating a new trip
+      const tripData = {
+        ...validatedData,
+        availableWeight: validatedData.maxWeight,
+      };
+
+      const trip = await storage.createTrip(tripData);
       res.json(trip);
     } catch (error: any) {
       console.error("Error creating trip:", error);

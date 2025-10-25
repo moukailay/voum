@@ -1,20 +1,17 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, type ChangeEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
-import { Send, MessageCircle, Star, ArrowLeft, Paperclip, ChevronDown, ChevronUp, Package, MapPin, Calendar, Weight, X, FileText, Image as ImageIcon } from "lucide-react";
+import { Send, MessageCircle, Star, ArrowLeft, Paperclip, ChevronDown, ChevronUp, MapPin, Calendar, Weight, X, FileText, Image as ImageIcon } from "lucide-react";
 import { Card } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
-import { ObjectUploader } from "@/components/ObjectUploader";
 import { useAuth } from "@/hooks/useAuth";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import type { Message, User, MessageAttachment } from "@shared/schema";
 import { format } from "date-fns";
-import type { UploadResult } from "@uppy/core";
 
 interface MessageWithUsers extends Message {
   sender?: User;
@@ -313,47 +310,17 @@ export default function Messages() {
     }
   };
 
-  // Get presigned URL for file upload
-  const getUploadParameters = async () => {
-    const response = await fetch("/api/object-storage/presigned-url", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      credentials: "include",
-    });
-
-    if (!response.ok) {
-      throw new Error("Échec de l'obtention de l'URL de téléversement");
-    }
-
-    const data = await response.json();
-    return {
-      method: "PUT" as const,
-      url: data.url,
-    };
+  // Remove attached file
+  const removeAttachedFile = (fileId: string) => {
+    setAttachedFiles((prev) => prev.filter((f) => f.id !== fileId));
   };
 
-  // Handle file upload errors
-  const handleUploadError = (error: { type: string; message: string; file?: any }) => {
-    toast({
-      title: "Erreur de téléversement",
-      description: error.message,
-      variant: "destructive",
-    });
-  };
-
-  // Handle file upload completion
-  const handleUploadComplete = (result: UploadResult<Record<string, unknown>, Record<string, unknown>>) => {
-    const successful = result.successful || [];
+  // Handle file input change (native input without modal)
+  const handleFileInputChange = async (e: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
     
-    if (successful.length === 0) {
-      toast({
-        title: "Erreur",
-        description: "Aucun fichier n'a été téléversé",
-        variant: "destructive",
-      });
-      return;
-    }
-
+    if (files.length === 0) return;
+    
     // Calculate remaining slots
     const remainingSlots = 3 - attachedFiles.length;
     if (remainingSlots <= 0) {
@@ -362,42 +329,100 @@ export default function Messages() {
         description: "Vous ne pouvez joindre que 3 fichiers maximum",
         variant: "destructive",
       });
+      e.target.value = ""; // Reset input
       return;
     }
 
-    // Take only what fits in remaining slots
-    const filesToAdd = successful.slice(0, remainingSlots);
-    const newFiles: AttachedFile[] = filesToAdd.map((file: any) => ({
-      id: file.id || `file-${Date.now()}`,
-      name: file.name,
-      type: file.type || "application/octet-stream",
-      size: file.size || 0,
-      url: file.uploadURL || "",
-      thumbnailUrl: file.type?.startsWith("image/") ? file.uploadURL : undefined,
-    }));
+    // Validate and filter files
+    const maxFileSize = 5 * 1024 * 1024; // 5MB
+    const allowedTypes = ["image/jpeg", "image/jpg", "image/png", "application/pdf"];
+    const validFiles: File[] = [];
+    const errors: string[] = [];
 
-    setAttachedFiles((prev) => [...prev, ...newFiles]);
-    
-    const addedCount = newFiles.length;
-    const droppedCount = successful.length - addedCount;
-    
-    if (droppedCount > 0) {
+    for (const file of files.slice(0, remainingSlots)) {
+      if (!allowedTypes.includes(file.type)) {
+        errors.push(`"${file.name}" : type non autorisé`);
+        continue;
+      }
+      if (file.size > maxFileSize) {
+        errors.push(`"${file.name}" : taille maximale 5 MB dépassée`);
+        continue;
+      }
+      validFiles.push(file);
+    }
+
+    if (errors.length > 0) {
       toast({
-        title: "Limite atteinte",
-        description: `${addedCount} fichier(s) ajouté(s). ${droppedCount} fichier(s) ignoré(s) (max 3 fichiers)`,
+        title: "Erreur de fichier",
+        description: errors.join("\n"),
         variant: "destructive",
       });
-    } else {
+    }
+
+    if (validFiles.length === 0) {
+      e.target.value = ""; // Reset input
+      return;
+    }
+
+    // Upload files
+    try {
+      const uploadPromises = validFiles.map(async (file) => {
+        // Get presigned URL
+        const urlResponse = await fetch("/api/object-storage/presigned-url", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          credentials: "include",
+        });
+
+        if (!urlResponse.ok) {
+          throw new Error(`Échec pour ${file.name}`);
+        }
+
+        const { url } = await urlResponse.json();
+
+        // Upload file
+        const uploadResponse = await fetch(url, {
+          method: "PUT",
+          body: file,
+          headers: {
+            "Content-Type": file.type,
+          },
+        });
+
+        if (!uploadResponse.ok) {
+          throw new Error(`Échec du téléversement de ${file.name}`);
+        }
+
+        // Extract public URL (remove query params from presigned URL)
+        const publicUrl = url.split("?")[0];
+
+        return {
+          id: `file-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+          name: file.name,
+          type: file.type,
+          size: file.size,
+          url: publicUrl,
+          thumbnailUrl: file.type.startsWith("image/") ? publicUrl : undefined,
+        };
+      });
+
+      const uploadedFiles = await Promise.all(uploadPromises);
+      setAttachedFiles((prev) => [...prev, ...uploadedFiles]);
+
       toast({
         title: "Succès",
-        description: `${addedCount} fichier(s) joint(s)`,
+        description: `${uploadedFiles.length} fichier(s) joint(s)`,
       });
+    } catch (error) {
+      console.error("Upload error:", error);
+      toast({
+        title: "Erreur de téléversement",
+        description: error instanceof Error ? error.message : "Échec du téléversement",
+        variant: "destructive",
+      });
+    } finally {
+      e.target.value = ""; // Reset input for next use
     }
-  };
-
-  // Remove attached file
-  const removeAttachedFile = (fileId: string) => {
-    setAttachedFiles((prev) => prev.filter((f) => f.id !== fileId));
   };
 
   // Send read receipt when messages are viewed
@@ -748,7 +773,8 @@ export default function Messages() {
                         {attachedFiles.map((file) => (
                           <div
                             key={file.id}
-                            className="relative group rounded-md border border-card-border p-2 flex items-center gap-2 bg-card"
+                            className="relative group rounded-md border border-card-border p-2 flex items-center gap-2 bg-card max-w-full"
+                            data-testid={`preview-file-${file.id}`}
                           >
                             {file.type.startsWith("image/") ? (
                               <ImageIcon className="h-4 w-4 text-muted-foreground shrink-0" />
@@ -756,7 +782,7 @@ export default function Messages() {
                               <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
                             )}
                             <div className="flex-1 min-w-0">
-                              <p className="text-xs font-medium truncate max-w-[120px]">
+                              <p className="text-xs font-medium truncate max-w-[140px]">
                                 {file.name}
                               </p>
                               <p className="text-xs text-muted-foreground">
@@ -768,6 +794,7 @@ export default function Messages() {
                               size="icon"
                               className="h-6 w-6 shrink-0"
                               onClick={() => removeAttachedFile(file.id)}
+                              aria-label={`Retirer ${file.name}`}
                               data-testid={`button-remove-file-${file.id}`}
                             >
                               <X className="h-3 w-3" />
@@ -781,29 +808,32 @@ export default function Messages() {
                   {/* Compose bar */}
                   <div className="p-3">
                     <div className="flex gap-2 items-end">
-                      {attachedFiles.length < 3 ? (
-                        <ObjectUploader
-                          maxNumberOfFiles={3 - attachedFiles.length}
-                          uploadType="document"
-                          onGetUploadParameters={getUploadParameters}
-                          onComplete={handleUploadComplete}
-                          onError={handleUploadError}
-                          buttonVariant="ghost"
-                          buttonClassName="min-h-[44px] min-w-[44px] shrink-0"
-                        >
-                          <Paperclip className="h-5 w-5" />
-                        </ObjectUploader>
-                      ) : (
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="min-h-[44px] min-w-[44px] shrink-0 opacity-50 cursor-not-allowed"
-                          disabled
-                          data-testid="button-attach-file-disabled"
-                        >
-                          <Paperclip className="h-5 w-5" />
-                        </Button>
-                      )}
+                      {/* Hidden file input - Never gets focus automatically */}
+                      <input
+                        type="file"
+                        id="file-input-hidden"
+                        multiple
+                        accept=".jpg,.jpeg,.png,.pdf"
+                        className="hidden"
+                        onChange={handleFileInputChange}
+                        data-testid="input-file-hidden"
+                      />
+                      
+                      {/* Attach file button */}
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="icon"
+                        className="min-h-[44px] min-w-[44px] shrink-0"
+                        disabled={attachedFiles.length >= 3}
+                        onClick={() => document.getElementById('file-input-hidden')?.click()}
+                        aria-label="Joindre un fichier"
+                        data-testid="button-attach-file"
+                      >
+                        <Paperclip className="h-5 w-5" />
+                      </Button>
+                      
+                      {/* Message input */}
                       <div className="flex-1">
                         <div className="relative">
                           <Textarea
@@ -820,30 +850,34 @@ export default function Messages() {
                               }
                             }}
                             className={cn(
-                              "min-h-[44px] max-h-[120px] resize-none",
+                              "min-h-[44px] max-h-[120px] resize-none text-base",
                               isMessageTooLong && "border-destructive focus-visible:ring-destructive"
                             )}
                             rows={1}
                             data-testid="input-message"
                           />
                           <div className={cn(
-                            "absolute bottom-1 right-2 text-xs",
+                            "absolute bottom-2 right-2 text-xs pointer-events-none",
                             isMessageTooLong ? "text-destructive font-semibold" : "text-muted-foreground"
                           )}>
                             {messageInput.length}/{MAX_MESSAGE_LENGTH}
                           </div>
                         </div>
                         {isMessageTooLong && (
-                          <p className="text-xs text-destructive mt-1" data-testid="text-error-message-too-long">
+                          <p className="text-xs text-destructive mt-1" role="alert" data-testid="text-error-message-too-long">
                             Votre message est trop long. Maximum {MAX_MESSAGE_LENGTH} caractères.
                           </p>
                         )}
                       </div>
+                      
+                      {/* Send button */}
                       <Button
+                        type="button"
                         size="icon"
                         onClick={sendMessage}
                         disabled={!isMessageValid}
                         className="min-h-[44px] min-w-[44px] shrink-0"
+                        aria-label="Envoyer le message"
                         data-testid="button-send-message"
                       >
                         <Send className="h-5 w-5" />

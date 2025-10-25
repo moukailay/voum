@@ -710,6 +710,18 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  // ==================== Object Storage Routes ====================
+  app.post("/api/object-storage/presigned-url", isAuthenticated, async (req: any, res) => {
+    try {
+      const objectStorageService = new ObjectStorageService();
+      const url = await objectStorageService.getObjectEntityUploadURL();
+      res.json({ url });
+    } catch (error) {
+      console.error("Error generating presigned URL:", error);
+      res.status(500).json({ message: "Failed to generate upload URL" });
+    }
+  });
+
   // ==================== WebSocket Server ====================
   const httpServer = createServer(app);
   const wss = new WebSocketServer({ server: httpServer, path: "/ws" });
@@ -890,7 +902,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             for (const attachment of message.attachments) {
               const createdAttachment = await storage.createMessageAttachment({
                 messageId: newMessage.id,
-                url: attachment.url,
+                fileUrl: attachment.url,
                 fileName: attachment.name || attachment.fileName,
                 fileType: attachment.type || attachment.fileType,
                 fileSize: attachment.size || attachment.fileSize,

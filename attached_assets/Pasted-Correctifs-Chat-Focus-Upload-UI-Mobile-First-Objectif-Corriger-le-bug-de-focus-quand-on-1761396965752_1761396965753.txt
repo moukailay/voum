@@ -1,0 +1,94 @@
+Correctifs Chat — Focus, Upload & UI (Mobile-First)
+🎯 Objectif
+
+Corriger le bug de focus : quand on tape dans la zone de saisie, le curseur ne doit plus sauter vers le bouton de téléversement.
+
+Nettoyer le design de la barre de composition (icône pièce jointe, zone de drop, champ texte, bouton envoyer).
+
+Garantir une expérience mobile-first, responsive et accessible.
+
+🐞 Problèmes observés
+
+Le focus quitte le champ de saisie et se place sur le bouton de téléversement.
+
+La zone “Drop your files here / browse files” prend la place et perturbe la frappe.
+
+Alignements et espacements incohérents, lisibilité perfectible.
+
+✅ Correctifs demandés (fonctionnels & UX)
+1) Gestion du focus (priorité)
+
+Ne jamais auto-focus le champ de téléversement (retirer tout autofocus / appel programmatique de focus sur cet élément).
+
+Conserver le focus sur le champ texte dès qu’un utilisateur commence à taper.
+
+Empêcher tout re-montage de la zone upload qui provoquerait une perte de focus (stabiliser le DOM, pas de remplacement dynamique de nœuds autour du champ de saisie).
+
+Tab order cohérent : tabindex naturel = (1) pièce jointe → (2) champ texte → (3) envoyer.
+
+Éviter que le clic sur le label de l’upload déplace le focus si ce n’est pas l’intention. L’input fichier reste caché et cliquable via le label uniquement.
+
+2) Zone de téléversement (upload)
+
+Input fichier caché (display:none), déclenché par un bouton/label avec icône trombone.
+
+Aucune bannière “Drop files here” intrusive par défaut.
+
+Afficher une zone de drop discrète uniquement pendant un drag-over, puis la masquer lorsqu’il n’y a plus de drag.
+
+Prévisualisations des fichiers sélectionnés (nom + taille + bouton “×” pour retirer).
+
+Limites : 3 fichiers max, 5 Mo/fichier, types autorisés : .jpg, .png, .pdf.
+
+3) Barre de composition (layout)
+
+Contenu en ligne (row) :
+[ icône pièce jointe ] [ champ texte flexible ] [ bouton envoyer ]
+
+Mobile-first :
+
+Hauteur de la barre : 56–64px, paddings 8–12px.
+
+Touch targets ≥ 44px.
+
+Bouton envoyer collant en bas de l’écran sur mobile.
+
+Desktop : largeur max 768–960px centrée; la barre reste claire, sans débordements.
+
+Compteur caractères (0/2000) aligné à droite, gris discret.
+
+4) Styles & lisibilité
+
+Police ≥ 16px en mobile.
+
+Contraste AA minimum.
+
+Placeholder “Écrivez un message…” gris moyen (pas trop pâle).
+
+Espacements réguliers (8/12/16).
+
+Icônes alignées verticalement au centre.
+
+5) Accessibilité
+
+Libellé ARIA pour le bouton pièce jointe (“Joindre un fichier”).
+
+Rôle “button” et aria-pressed non nécessaire (action ponctuelle).
+
+Annoncer via ARIA live quand un fichier est ajouté/supprimé.
+
+Focus visible (outline) sur tous les éléments interactifs.
+
+6) États & erreurs
+
+Lors d’un envoi : bouton envoyer passe en état chargement (spinner) + désactivé.
+
+Erreurs claires :
+
+“Type de fichier non autorisé.”
+
+“Taille maximale (5 Mo) dépassée.”
+
+“Vous pouvez ajouter jusqu’à 3 fichiers.”
+
+Messages d’erreur sous la barre avec un style discret mais lisible.

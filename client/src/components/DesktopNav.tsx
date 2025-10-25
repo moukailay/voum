@@ -23,6 +23,7 @@ export function DesktopNav({ user }: DesktopNavProps) {
   const navItems = [
     { label: "Search Trips", path: "/search" },
     { label: "My Trips", path: "/my-trips" },
+    { label: "My Bookings", path: "/my-bookings" },
     { label: "Messages", path: "/messages" },
   ];
 

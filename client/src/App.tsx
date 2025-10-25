@@ -16,6 +16,7 @@ import TripDetails from "@/pages/TripDetails";
 import Messages from "@/pages/Messages";
 import Profile from "@/pages/Profile";
 import MyTrips from "@/pages/MyTrips";
+import MyBookings from "@/pages/MyBookings";
 import BookingDetails from "@/pages/BookingDetails";
 
 function Router() {
@@ -37,6 +38,7 @@ function Router() {
             <Route path="/messages" component={Messages} />
             <Route path="/profile" component={Profile} />
             <Route path="/my-trips" component={MyTrips} />
+            <Route path="/my-bookings" component={MyBookings} />
             <Route path="/bookings/:id" component={BookingDetails} />
           </>
         )}

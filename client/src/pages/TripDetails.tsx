@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
-import { useRoute, useLocation } from "wouter";
+import { useRoute, useLocation, Link } from "wouter";
 import {
   MapPin,
   Calendar,
@@ -10,6 +10,7 @@ import {
   MessageCircle,
   ArrowRight,
   CheckCircle,
+  ChevronRight,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -29,10 +30,14 @@ import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { isUnauthorizedError } from "@/lib/authUtils";
 import { useAuth } from "@/hooks/useAuth";
-import type { Trip, User } from "@shared/schema";
+import type { Trip, User, Booking } from "@shared/schema";
 
 interface TripWithTraveler extends Trip {
   traveler?: User;
+}
+
+interface BookingWithSender extends Booking {
+  sender?: User;
 }
 
 export default function TripDetails() {
@@ -56,6 +61,14 @@ export default function TripDetails() {
   const { data: trip, isLoading } = useQuery<TripWithTraveler>({
     queryKey: ["/api/trips", tripId],
     enabled: !!tripId,
+  });
+
+  const isOwnTrip = user?.id === trip?.travelerId;
+
+  // Fetch bookings if this is the traveler's own trip
+  const { data: tripBookings } = useQuery<BookingWithSender[]>({
+    queryKey: ["/api/trips", tripId, "bookings"],
+    enabled: !!tripId && isOwnTrip,
   });
 
   // Pre-fill sender info when dialog opens
@@ -183,7 +196,6 @@ export default function TripDetails() {
     year: "numeric",
   });
 
-  const isOwnTrip = user?.id === trip.travelerId;
   const totalPrice = weight ? (Number(weight) * Number(trip.pricePerKg)).toFixed(2) : "0.00";
 
   return (
@@ -350,6 +362,65 @@ export default function TripDetails() {
             )}
           </div>
         </div>
+
+        {/* Bookings Section - Only visible to trip owner */}
+        {isOwnTrip && tripBookings && tripBookings.length > 0 && (
+          <Card className="p-4 md:p-6 mt-6">
+            <h3 className="text-lg font-semibold mb-4">
+              Réservations ({tripBookings.length})
+            </h3>
+            <div className="space-y-3">
+              {tripBookings.map((booking) => {
+                const statusConfig = {
+                  pending: { label: "En attente", variant: "secondary" as const },
+                  confirmed: { label: "Confirmé", variant: "default" as const },
+                  picked_up: { label: "Récupéré", variant: "default" as const },
+                  in_transit: { label: "En transit", variant: "default" as const },
+                  arrived: { label: "Arrivé", variant: "default" as const },
+                  delivered: { label: "Livré", variant: "default" as const },
+                  cancelled: { label: "Annulé", variant: "destructive" as const },
+                };
+                const config = statusConfig[booking.status as keyof typeof statusConfig];
+
+                return (
+                  <Link
+                    key={booking.id}
+                    href={`/bookings/${booking.id}`}
+                  >
+                    <Card className="p-4 hover-elevate active-elevate-2 transition-all cursor-pointer" data-testid={`card-booking-${booking.id}`}>
+                      <div className="flex items-center justify-between gap-4">
+                        <div className="flex items-center gap-3 flex-1 min-w-0">
+                          <Avatar className="h-10 w-10 flex-shrink-0">
+                            <AvatarImage src={booking.sender?.profileImageUrl || undefined} />
+                            <AvatarFallback>
+                              {booking.sender?.firstName?.[0] || booking.sender?.email?.[0] || "S"}
+                            </AvatarFallback>
+                          </Avatar>
+                          <div className="flex-1 min-w-0">
+                            <div className="font-medium truncate">
+                              {booking.sender?.firstName && booking.sender?.lastName
+                                ? `${booking.sender.firstName} ${booking.sender.lastName}`
+                                : booking.senderName}
+                            </div>
+                            <div className="text-sm text-muted-foreground">
+                              {Number(booking.weight).toFixed(1)}kg • {Number(booking.price).toFixed(2)}€
+                            </div>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-2 flex-shrink-0">
+                          <Badge variant={config.variant} data-testid={`badge-status-${booking.id}`}>
+                            {config.label}
+                          </Badge>
+                          <ChevronRight className="h-5 w-5 text-muted-foreground" />
+                        </div>
+                      </div>
+                    </Card>
+                  </Link>
+                );
+              })}
+            </div>
+          </Card>
+        )}
 
         {/* CTA - Sticky on mobile, inline on desktop */}
         {!isOwnTrip && trip.status === "active" && (

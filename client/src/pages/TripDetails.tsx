@@ -1,6 +1,9 @@
 import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useRoute, useLocation, Link } from "wouter";
+import { useForm } from "react-hook-form";
+import { zodResolver } from "@hookform/resolvers/zod";
+import { z } from "zod";
 import {
   MapPin,
   Calendar,
@@ -11,6 +14,7 @@ import {
   ArrowRight,
   CheckCircle,
   ChevronRight,
+  Clock,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -22,14 +26,25 @@ import {
   DialogHeader,
   DialogTitle,
   DialogDescription,
+  DialogFooter,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
-import { Label } from "@/components/ui/label";
+import {
+  Form,
+  FormControl,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormMessage,
+  FormDescription,
+} from "@/components/ui/form";
 import { useToast } from "@/hooks/use-toast";
 import { apiRequest, queryClient } from "@/lib/queryClient";
 import { isUnauthorizedError } from "@/lib/authUtils";
 import { useAuth } from "@/hooks/useAuth";
+import { DateTimePicker } from "@/components/DateTimePicker";
+import { insertBookingSchema } from "@shared/schema";
 import type { Trip, User, Booking } from "@shared/schema";
 
 interface TripWithTraveler extends Trip {
@@ -40,6 +55,30 @@ interface BookingWithSender extends Booking {
   sender?: User;
 }
 
+// Extended booking schema with appointment validation
+const bookingFormSchema = insertBookingSchema.extend({
+  pickupLocation: z.string().min(1, "Le lieu de remise est requis"),
+  pickupDateTime: z.date({
+    required_error: "La date de remise est requise",
+  }),
+  deliveryLocation: z.string().optional(),
+  deliveryDateTime: z.date().optional().nullable(),
+}).refine(
+  (data) => {
+    // If delivery datetime is provided, delivery location must be provided
+    if (data.deliveryDateTime && !data.deliveryLocation) {
+      return false;
+    }
+    return true;
+  },
+  {
+    message: "Le lieu de livraison est requis si vous spécifiez une date de livraison",
+    path: ["deliveryLocation"],
+  }
+);
+
+type BookingFormData = z.infer<typeof bookingFormSchema>;
+
 export default function TripDetails() {
   const [, params] = useRoute("/trips/:id");
   const tripId = params?.id;
@@ -48,15 +87,6 @@ export default function TripDetails() {
   const { user } = useAuth();
 
   const [showBookingDialog, setShowBookingDialog] = useState(false);
-  const [weight, setWeight] = useState("");
-  const [description, setDescription] = useState("");
-  const [senderName, setSenderName] = useState("");
-  const [senderPhone, setSenderPhone] = useState("");
-  const [errors, setErrors] = useState<{
-    weight?: string;
-    senderName?: string;
-    senderPhone?: string;
-  }>({});
 
   const { data: trip, isLoading } = useQuery<TripWithTraveler>({
     queryKey: ["/api/trips", tripId],
@@ -71,32 +101,59 @@ export default function TripDetails() {
     enabled: !!tripId && isOwnTrip,
   });
 
+  const form = useForm<BookingFormData>({
+    resolver: zodResolver(bookingFormSchema),
+    defaultValues: {
+      tripId: tripId || "",
+      weight: "",
+      description: "",
+      senderName: "",
+      senderPhone: "",
+      price: "0",
+      pickupLocation: "",
+      pickupDateTime: undefined,
+      deliveryLocation: "",
+      deliveryDateTime: undefined,
+    },
+  });
+
   // Pre-fill sender info when dialog opens
   useEffect(() => {
     if (showBookingDialog && user) {
-      if (!senderName && user.firstName && user.lastName) {
-        setSenderName(`${user.firstName} ${user.lastName}`);
+      if (!form.getValues("senderName") && user.firstName && user.lastName) {
+        form.setValue("senderName", `${user.firstName} ${user.lastName}`);
       }
-      if (!senderPhone && user.phoneNumber) {
-        setSenderPhone(user.phoneNumber);
+      if (!form.getValues("senderPhone") && user.phoneNumber) {
+        form.setValue("senderPhone", user.phoneNumber);
       }
     }
-  }, [showBookingDialog, user, senderName, senderPhone]);
+  }, [showBookingDialog, user, form]);
+
+  // Watch weight for price calculation
+  const weight = form.watch("weight");
+  const totalPrice = weight && trip ? (Number(weight) * Number(trip.pricePerKg)).toFixed(2) : "0.00";
 
   const bookingMutation = useMutation({
-    mutationFn: async () => {
+    mutationFn: async (data: BookingFormData) => {
       if (!trip) return;
-      const price = Number(weight) * Number(trip.pricePerKg);
+      
+      // Server will calculate price, but we send it for validation
+      const price = Number(data.weight) * Number(trip.pricePerKg);
+      
       return await apiRequest("POST", "/api/bookings", {
-        tripId: trip.id,
-        weight,
-        description: description || "Colis à livrer",
-        senderName,
-        senderPhone,
+        tripId: data.tripId,
+        weight: data.weight,
+        description: data.description || "Colis à livrer",
+        senderName: data.senderName,
+        senderPhone: data.senderPhone,
         price: price.toFixed(2),
+        pickupLocation: data.pickupLocation,
+        pickupDateTime: data.pickupDateTime?.toISOString(),
+        deliveryLocation: data.deliveryLocation || null,
+        deliveryDateTime: data.deliveryDateTime?.toISOString() || null,
       });
     },
-    onSuccess: (data: any) => {
+    onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["/api/bookings"] });
       queryClient.invalidateQueries({ queryKey: ["/api/trips"] });
       queryClient.invalidateQueries({ queryKey: ["/api/messages/conversations"] });
@@ -105,6 +162,7 @@ export default function TripDetails() {
         description: "Consultez vos codes PIN dans 'Mes Réservations'",
       });
       setShowBookingDialog(false);
+      form.reset();
       // Redirect to my bookings to see PINs
       setLocation("/my-bookings");
     },
@@ -128,34 +186,37 @@ export default function TripDetails() {
     },
   });
 
-  const validateForm = () => {
-    const newErrors: typeof errors = {};
-    
-    if (!weight || Number(weight) <= 0) {
-      newErrors.weight = "Veuillez saisir un poids valide";
-    } else if (Number(weight) > Number(trip?.availableWeight || 0)) {
-      newErrors.weight = `Le poids maximum disponible est ${trip?.availableWeight}kg`;
-    }
-    
-    if (!senderName.trim()) {
-      newErrors.senderName = "Le nom est requis";
-    }
-    
-    if (!senderPhone.trim()) {
-      newErrors.senderPhone = "Le téléphone est requis";
-    } else if (!/^[0-9+\s\-()]{8,}$/.test(senderPhone)) {
-      newErrors.senderPhone = "Veuillez saisir un numéro de téléphone valide";
-    }
-    
-    setErrors(newErrors);
-    return Object.keys(newErrors).length === 0;
-  };
+  const onSubmit = (data: BookingFormData) => {
+    // Additional validation: dates must be between trip dates
+    if (trip) {
+      const departureDate = new Date(trip.departureDate);
+      const arrivalDate = new Date(trip.arrivalDate);
 
-  const handleBooking = () => {
-    if (!validateForm()) {
-      return;
+      if (data.pickupDateTime < departureDate || data.pickupDateTime > arrivalDate) {
+        form.setError("pickupDateTime", {
+          message: "La date de remise doit être entre la date de départ et d'arrivée du voyage",
+        });
+        return;
+      }
+
+      if (data.deliveryDateTime) {
+        if (data.deliveryDateTime < departureDate || data.deliveryDateTime > arrivalDate) {
+          form.setError("deliveryDateTime", {
+            message: "La date de livraison doit être entre la date de départ et d'arrivée du voyage",
+          });
+          return;
+        }
+
+        if (data.deliveryDateTime < data.pickupDateTime) {
+          form.setError("deliveryDateTime", {
+            message: "La date de livraison doit être après la date de remise",
+          });
+          return;
+        }
+      }
     }
-    bookingMutation.mutate();
+
+    bookingMutation.mutate(data);
   };
 
   if (isLoading) {
@@ -195,8 +256,6 @@ export default function TripDetails() {
     month: "long",
     year: "numeric",
   });
-
-  const totalPrice = weight ? (Number(weight) * Number(trip.pricePerKg)).toFixed(2) : "0.00";
 
   return (
     <div className="pb-24 md:pb-8">
@@ -453,153 +512,263 @@ export default function TripDetails() {
 
         {/* Booking Dialog */}
         <Dialog open={showBookingDialog} onOpenChange={setShowBookingDialog}>
-          <DialogContent>
+          <DialogContent className="max-h-[90vh] overflow-y-auto">
             <DialogHeader>
-              <DialogTitle>Book this trip</DialogTitle>
+              <DialogTitle>Réserver ce voyage</DialogTitle>
               <DialogDescription>
-                Provide details about your parcel
+                Fournissez les détails de votre colis et les rendez-vous
               </DialogDescription>
             </DialogHeader>
 
-            <div className="space-y-4">
-              <div>
-                <Label htmlFor="weight">Poids (kg) *</Label>
-                <Input
-                  id="weight"
-                  type="number"
-                  inputMode="decimal"
-                  step="0.1"
-                  placeholder="Ex: 5"
-                  value={weight}
-                  onChange={(e) => {
-                    const newWeight = e.target.value;
-                    setWeight(newWeight);
-                    
-                    // Real-time validation for weight
-                    const weightNum = Number(newWeight);
-                    const availableNum = Number(trip.availableWeight);
-                    
-                    if (!newWeight || weightNum <= 0) {
-                      setErrors({ ...errors, weight: undefined });
-                    } else if (weightNum > availableNum) {
-                      setErrors({ 
-                        ...errors, 
-                        weight: `Le poids maximum disponible est ${availableNum.toFixed(0)}kg` 
-                      });
-                    } else {
-                      setErrors({ ...errors, weight: undefined });
-                    }
-                  }}
-                  data-testid="input-booking-weight"
-                  className={errors.weight ? "border-destructive" : ""}
-                />
-                {errors.weight ? (
-                  <p className="text-xs text-destructive mt-1">{errors.weight}</p>
-                ) : (
-                  <p className="text-xs text-muted-foreground mt-1">
-                    Maximum : {Number(trip.availableWeight).toFixed(1)}kg
-                  </p>
-                )}
-              </div>
+            <Form {...form}>
+              <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
+                {/* Parcel Information Section */}
+                <div className="space-y-4">
+                  <h4 className="text-base font-semibold">Informations colis</h4>
+                  
+                  <FormField
+                    control={form.control}
+                    name="weight"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Poids (kg) *</FormLabel>
+                        <FormControl>
+                          <Input
+                            type="number"
+                            inputMode="decimal"
+                            step="0.1"
+                            placeholder="Ex: 5"
+                            className="h-11"
+                            data-testid="input-booking-weight"
+                            {...field}
+                          />
+                        </FormControl>
+                        <FormDescription>
+                          Maximum : {Number(trip.availableWeight).toFixed(1)}kg
+                        </FormDescription>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
 
-              <div>
-                <Label htmlFor="senderName">Votre nom *</Label>
-                <Input
-                  id="senderName"
-                  type="text"
-                  placeholder="Ex: Jean Dupont"
-                  value={senderName}
-                  onChange={(e) => {
-                    setSenderName(e.target.value);
-                    if (errors.senderName) setErrors({ ...errors, senderName: undefined });
-                  }}
-                  data-testid="input-booking-sender-name"
-                  className={errors.senderName ? "border-destructive" : ""}
-                />
-                {errors.senderName && (
-                  <p className="text-xs text-destructive mt-1">{errors.senderName}</p>
-                )}
-              </div>
+                  <FormField
+                    control={form.control}
+                    name="senderName"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Votre nom *</FormLabel>
+                        <FormControl>
+                          <Input
+                            type="text"
+                            placeholder="Ex: Jean Dupont"
+                            className="h-11"
+                            data-testid="input-booking-sender-name"
+                            {...field}
+                            value={field.value || ""}
+                          />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
 
-              <div>
-                <Label htmlFor="senderPhone">Votre téléphone *</Label>
-                <Input
-                  id="senderPhone"
-                  type="tel"
-                  inputMode="tel"
-                  placeholder="Ex: +33 6 12 34 56 78"
-                  value={senderPhone}
-                  onChange={(e) => {
-                    setSenderPhone(e.target.value);
-                    if (errors.senderPhone) setErrors({ ...errors, senderPhone: undefined });
-                  }}
-                  data-testid="input-booking-sender-phone"
-                  className={errors.senderPhone ? "border-destructive" : ""}
-                />
-                {errors.senderPhone && (
-                  <p className="text-xs text-destructive mt-1">{errors.senderPhone}</p>
-                )}
-              </div>
+                  <FormField
+                    control={form.control}
+                    name="senderPhone"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Votre téléphone *</FormLabel>
+                        <FormControl>
+                          <Input
+                            type="tel"
+                            inputMode="tel"
+                            placeholder="Ex: +33 6 12 34 56 78"
+                            className="h-11"
+                            data-testid="input-booking-sender-phone"
+                            {...field}
+                            value={field.value || ""}
+                          />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
 
-              <div>
-                <Label htmlFor="description">Description du colis (optionnel)</Label>
-                <Textarea
-                  id="description"
-                  rows={3}
-                  placeholder="Décrivez ce que vous envoyez..."
-                  value={description}
-                  onChange={(e) => setDescription(e.target.value)}
-                  data-testid="input-booking-description"
-                />
-              </div>
-
-              {weight && Number(weight) > 0 && (
-                <div className="p-4 bg-primary/5 border border-primary/20 rounded-lg">
-                  <div className="flex justify-between items-center">
-                    <span className="font-medium">Prix total :</span>
-                    <span className="text-2xl font-bold text-primary">
-                      {totalPrice}€
-                    </span>
-                  </div>
-                  <p className="text-xs text-muted-foreground mt-2">
-                    {weight}kg × {Number(trip.pricePerKg).toFixed(2)}€/kg
-                  </p>
+                  <FormField
+                    control={form.control}
+                    name="description"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Description du colis (optionnel)</FormLabel>
+                        <FormControl>
+                          <Textarea
+                            rows={3}
+                            placeholder="Décrivez ce que vous envoyez..."
+                            data-testid="input-booking-description"
+                            {...field}
+                            value={field.value || ""}
+                          />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
                 </div>
-              )}
 
-              <div className="flex gap-3">
-                <Button
-                  variant="outline"
-                  onClick={() => setShowBookingDialog(false)}
-                  className="flex-1"
-                >
-                  Cancel
-                </Button>
-                <Button
-                  onClick={handleBooking}
-                  disabled={
-                    bookingMutation.isPending || 
-                    !weight || 
-                    !senderName || 
-                    !senderPhone || 
-                    !!errors.weight || 
-                    !!errors.senderName || 
-                    !!errors.senderPhone
-                  }
-                  className="flex-1"
-                  data-testid="button-confirm-booking"
-                >
-                  {bookingMutation.isPending ? (
-                    <>
-                      <span className="inline-block h-4 w-4 border-2 border-current border-t-transparent rounded-full animate-spin mr-2" />
-                      Réservation...
-                    </>
-                  ) : (
-                    "Confirmer la réservation"
-                  )}
-                </Button>
-              </div>
-            </div>
+                {/* Pickup Appointment Section */}
+                <div className="space-y-4">
+                  <div className="flex items-center gap-2">
+                    <Clock className="h-5 w-5 text-primary" />
+                    <h4 className="text-base font-semibold">Rendez-vous remise *</h4>
+                  </div>
+                  
+                  <FormField
+                    control={form.control}
+                    name="pickupLocation"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Lieu de remise *</FormLabel>
+                        <FormControl>
+                          <Input
+                            type="text"
+                            placeholder="Ex: Gare Montparnasse, Paris"
+                            className="h-11 capitalize"
+                            data-testid="input-pickup-location"
+                            {...field}
+                          />
+                        </FormControl>
+                        <FormDescription>
+                          Indiquez un lieu précis de rencontre
+                        </FormDescription>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+
+                  <FormField
+                    control={form.control}
+                    name="pickupDateTime"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Date et heure de remise *</FormLabel>
+                        <FormControl>
+                          <DateTimePicker
+                            value={field.value}
+                            onChange={field.onChange}
+                            minDate={new Date(trip.departureDate)}
+                            maxDate={new Date(trip.arrivalDate)}
+                            placeholder="Sélectionner date et heure"
+                            data-testid="input-pickup-datetime"
+                          />
+                        </FormControl>
+                        <FormDescription>
+                          Entre le {new Date(trip.departureDate).toLocaleDateString("fr-FR")} et le {new Date(trip.arrivalDate).toLocaleDateString("fr-FR")}
+                        </FormDescription>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                </div>
+
+                {/* Delivery Appointment Section (Optional) */}
+                <div className="space-y-4">
+                  <div className="flex items-center gap-2">
+                    <Clock className="h-5 w-5 text-muted-foreground" />
+                    <h4 className="text-base font-semibold text-muted-foreground">
+                      Rendez-vous livraison (optionnel)
+                    </h4>
+                  </div>
+                  
+                  <FormField
+                    control={form.control}
+                    name="deliveryLocation"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Lieu de livraison</FormLabel>
+                        <FormControl>
+                          <Input
+                            type="text"
+                            placeholder="Ex: Gare de Lyon, Lyon"
+                            className="h-11 capitalize"
+                            data-testid="input-delivery-location"
+                            {...field}
+                          />
+                        </FormControl>
+                        <FormDescription>
+                          Optionnel : lieu de rencontre à destination
+                        </FormDescription>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+
+                  <FormField
+                    control={form.control}
+                    name="deliveryDateTime"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel>Date et heure de livraison</FormLabel>
+                        <FormControl>
+                          <DateTimePicker
+                            value={field.value || undefined}
+                            onChange={field.onChange}
+                            minDate={new Date(trip.departureDate)}
+                            maxDate={new Date(trip.arrivalDate)}
+                            placeholder="Sélectionner date et heure"
+                            data-testid="input-delivery-datetime"
+                          />
+                        </FormControl>
+                        <FormDescription>
+                          Optionnel : rendez-vous à l'arrivée
+                        </FormDescription>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                </div>
+
+                {/* Price Summary */}
+                {weight && Number(weight) > 0 && (
+                  <div className="p-4 bg-primary/5 border border-primary/20 rounded-lg">
+                    <div className="flex justify-between items-center">
+                      <span className="font-medium">Prix total :</span>
+                      <span className="text-2xl font-bold text-primary">
+                        {totalPrice}€
+                      </span>
+                    </div>
+                    <p className="text-xs text-muted-foreground mt-2">
+                      {weight}kg × {Number(trip.pricePerKg).toFixed(2)}€/kg
+                    </p>
+                  </div>
+                )}
+
+                <DialogFooter className="gap-3 sm:gap-3">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => setShowBookingDialog(false)}
+                    className="flex-1"
+                  >
+                    Annuler
+                  </Button>
+                  <Button
+                    type="submit"
+                    disabled={bookingMutation.isPending}
+                    className="flex-1"
+                    data-testid="button-confirm-booking"
+                  >
+                    {bookingMutation.isPending ? (
+                      <>
+                        <span className="inline-block h-4 w-4 border-2 border-current border-t-transparent rounded-full animate-spin mr-2" />
+                        Réservation...
+                      </>
+                    ) : (
+                      "Confirmer la réservation"
+                    )}
+                  </Button>
+                </DialogFooter>
+              </form>
+            </Form>
           </DialogContent>
         </Dialog>
       </div>

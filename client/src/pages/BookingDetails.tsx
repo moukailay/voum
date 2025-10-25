@@ -1,6 +1,8 @@
 import { useState, useEffect } from "react";
 import { useQuery, useMutation } from "@tanstack/react-query";
 import { useRoute, useLocation } from "wouter";
+import { formatDistanceToNow, format } from "date-fns";
+import { fr } from "date-fns/locale";
 import {
   MapPin,
   Package,
@@ -9,6 +11,10 @@ import {
   TrendingUp,
   MessageCircle,
   DollarSign,
+  Calendar,
+  ExternalLink,
+  ChevronDown,
+  History,
 } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -21,6 +27,11 @@ import {
   DialogTitle,
   DialogDescription,
 } from "@/components/ui/dialog";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
@@ -51,6 +62,7 @@ export default function BookingDetails() {
   const { user, isLoading: authLoading, isAuthenticated } = useAuth();
   const [showPinDialog, setShowPinDialog] = useState(false);
   const [pin, setPin] = useState("");
+  const [historyOpen, setHistoryOpen] = useState(false);
 
   useEffect(() => {
     if (!authLoading && !isAuthenticated) {
@@ -103,6 +115,68 @@ export default function BookingDetails() {
     },
   });
 
+  const confirmPickupMutation = useMutation({
+    mutationFn: async () => {
+      return await apiRequest("POST", `/api/bookings/${bookingId}/confirm-pickup`, {});
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/bookings", bookingId] });
+      toast({
+        title: "Présence confirmée !",
+        description: "Votre présence au rendez-vous de remise a été confirmée",
+      });
+    },
+    onError: (error: Error) => {
+      if (isUnauthorizedError(error)) {
+        toast({
+          title: "Unauthorized",
+          description: "You are logged out. Logging in again...",
+          variant: "destructive",
+        });
+        setTimeout(() => {
+          window.location.href = "/api/login";
+        }, 500);
+        return;
+      }
+      toast({
+        title: "Erreur",
+        description: error.message || "Impossible de confirmer la présence",
+        variant: "destructive",
+      });
+    },
+  });
+
+  const confirmDeliveryMutation = useMutation({
+    mutationFn: async () => {
+      return await apiRequest("POST", `/api/bookings/${bookingId}/confirm-delivery`, {});
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["/api/bookings", bookingId] });
+      toast({
+        title: "Présence confirmée !",
+        description: "Votre présence au rendez-vous de livraison a été confirmée",
+      });
+    },
+    onError: (error: Error) => {
+      if (isUnauthorizedError(error)) {
+        toast({
+          title: "Unauthorized",
+          description: "You are logged out. Logging in again...",
+          variant: "destructive",
+        });
+        setTimeout(() => {
+          window.location.href = "/api/login";
+        }, 500);
+        return;
+      }
+      toast({
+        title: "Erreur",
+        description: error.message || "Impossible de confirmer la présence",
+        variant: "destructive",
+      });
+    },
+  });
+
   if (isLoading || authLoading) {
     return (
       <div className="flex items-center justify-center min-h-screen pb-20 md:pb-8">
@@ -128,6 +202,21 @@ export default function BookingDetails() {
   const currentStepIndex = statusSteps.findIndex((s) => s.key === booking.status);
   const isTraveler = user?.id === booking.trip?.travelerId;
   const isSender = user?.id === booking.senderId;
+
+  // Helper function to create Google Maps link
+  const getMapLink = (location: string) => {
+    return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(location)}`;
+  };
+
+  // Helper function to calculate days until appointment
+  const getDaysUntil = (date: Date | string | null | undefined) => {
+    if (!date) return null;
+    const appointmentDate = typeof date === 'string' ? new Date(date) : date;
+    const now = new Date();
+    const diffTime = appointmentDate.getTime() - now.getTime();
+    const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+    return diffDays;
+  };
 
   return (
     <div className="pb-20 md:pb-8">
@@ -324,6 +413,294 @@ export default function BookingDetails() {
           )}
         </div>
 
+        {/* Appointments */}
+        {(booking.pickupDateTime || booking.deliveryDateTime) && (
+          <Card className="p-6 md:p-8 mb-6">
+            <h2 className="text-xl font-semibold mb-6">Rendez-vous</h2>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {/* Pickup Appointment */}
+              {booking.pickupDateTime && (
+                <div className="space-y-4">
+                  <div className="flex items-center gap-2">
+                    <Clock className="h-5 w-5 text-primary" />
+                    <h3 className="text-lg font-semibold">Remise du colis</h3>
+                  </div>
+
+                  <div className="space-y-3">
+                    {/* Location with Map Link */}
+                    {booking.pickupLocation && (
+                      <div className="flex items-start gap-3 p-3 bg-muted/30 rounded-lg">
+                        <MapPin className="h-5 w-5 text-muted-foreground flex-shrink-0 mt-0.5" />
+                        <div className="flex-1 min-w-0">
+                          <div className="text-sm text-muted-foreground mb-1">Lieu</div>
+                          <div className="font-medium mb-2">{booking.pickupLocation}</div>
+                          <a
+                            href={getMapLink(booking.pickupLocation)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 text-sm text-primary hover:underline"
+                            data-testid="link-pickup-map"
+                          >
+                            <ExternalLink className="h-3 w-3" />
+                            Voir sur Google Maps
+                          </a>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Date/Time with Countdown */}
+                    <div className="flex items-start gap-3 p-3 bg-muted/30 rounded-lg">
+                      <Calendar className="h-5 w-5 text-muted-foreground flex-shrink-0 mt-0.5" />
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm text-muted-foreground mb-1">Date et heure</div>
+                        <div className="font-medium">
+                          {format(new Date(booking.pickupDateTime), "PPP 'à' HH:mm", { locale: fr })}
+                        </div>
+                        {(() => {
+                          const daysUntil = getDaysUntil(booking.pickupDateTime);
+                          if (daysUntil !== null && daysUntil >= 0) {
+                            return (
+                              <div className="text-xs text-muted-foreground mt-1">
+                                {daysUntil === 0 ? "Aujourd'hui" : daysUntil === 1 ? "Demain" : `Dans ${daysUntil} jours`}
+                              </div>
+                            );
+                          } else if (daysUntil !== null && daysUntil < 0) {
+                            return (
+                              <div className="text-xs text-destructive mt-1">
+                                Passé
+                              </div>
+                            );
+                          }
+                          return null;
+                        })()}
+                      </div>
+                    </div>
+
+                    {/* Confirmation Status & Button */}
+                    {booking.pickupConfirmedAt ? (
+                      <div className="flex items-center gap-2 p-3 bg-chart-3/10 border border-chart-3/20 rounded-lg">
+                        <CheckCircle className="h-5 w-5 text-chart-3" />
+                        <span className="text-sm font-medium text-chart-3">
+                          Présence confirmée
+                        </span>
+                      </div>
+                    ) : (
+                      <Button
+                        onClick={() => confirmPickupMutation.mutate()}
+                        disabled={confirmPickupMutation.isPending}
+                        className="w-full"
+                        data-testid="button-confirm-pickup"
+                      >
+                        {confirmPickupMutation.isPending ? (
+                          <>
+                            <span className="inline-block h-4 w-4 border-2 border-current border-t-transparent rounded-full animate-spin mr-2" />
+                            Confirmation...
+                          </>
+                        ) : (
+                          <>
+                            <CheckCircle className="h-4 w-4 mr-2" />
+                            Confirmer ma présence
+                          </>
+                        )}
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Delivery Appointment */}
+              {booking.deliveryDateTime && (
+                <div className="space-y-4">
+                  <div className="flex items-center gap-2">
+                    <Clock className="h-5 w-5 text-primary" />
+                    <h3 className="text-lg font-semibold">Livraison du colis</h3>
+                  </div>
+
+                  <div className="space-y-3">
+                    {/* Location with Map Link */}
+                    {booking.deliveryLocation && (
+                      <div className="flex items-start gap-3 p-3 bg-muted/30 rounded-lg">
+                        <MapPin className="h-5 w-5 text-muted-foreground flex-shrink-0 mt-0.5" />
+                        <div className="flex-1 min-w-0">
+                          <div className="text-sm text-muted-foreground mb-1">Lieu</div>
+                          <div className="font-medium mb-2">{booking.deliveryLocation}</div>
+                          <a
+                            href={getMapLink(booking.deliveryLocation)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 text-sm text-primary hover:underline"
+                            data-testid="link-delivery-map"
+                          >
+                            <ExternalLink className="h-3 w-3" />
+                            Voir sur Google Maps
+                          </a>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Date/Time with Countdown */}
+                    <div className="flex items-start gap-3 p-3 bg-muted/30 rounded-lg">
+                      <Calendar className="h-5 w-5 text-muted-foreground flex-shrink-0 mt-0.5" />
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm text-muted-foreground mb-1">Date et heure</div>
+                        <div className="font-medium">
+                          {format(new Date(booking.deliveryDateTime), "PPP 'à' HH:mm", { locale: fr })}
+                        </div>
+                        {(() => {
+                          const daysUntil = getDaysUntil(booking.deliveryDateTime);
+                          if (daysUntil !== null && daysUntil >= 0) {
+                            return (
+                              <div className="text-xs text-muted-foreground mt-1">
+                                {daysUntil === 0 ? "Aujourd'hui" : daysUntil === 1 ? "Demain" : `Dans ${daysUntil} jours`}
+                              </div>
+                            );
+                          } else if (daysUntil !== null && daysUntil < 0) {
+                            return (
+                              <div className="text-xs text-destructive mt-1">
+                                Passé
+                              </div>
+                            );
+                          }
+                          return null;
+                        })()}
+                      </div>
+                    </div>
+
+                    {/* Confirmation Status & Button */}
+                    {booking.deliveryConfirmedAt ? (
+                      <div className="flex items-center gap-2 p-3 bg-chart-3/10 border border-chart-3/20 rounded-lg">
+                        <CheckCircle className="h-5 w-5 text-chart-3" />
+                        <span className="text-sm font-medium text-chart-3">
+                          Présence confirmée
+                        </span>
+                      </div>
+                    ) : (
+                      <Button
+                        onClick={() => confirmDeliveryMutation.mutate()}
+                        disabled={confirmDeliveryMutation.isPending}
+                        className="w-full"
+                        data-testid="button-confirm-delivery"
+                      >
+                        {confirmDeliveryMutation.isPending ? (
+                          <>
+                            <span className="inline-block h-4 w-4 border-2 border-current border-t-transparent rounded-full animate-spin mr-2" />
+                            Confirmation...
+                          </>
+                        ) : (
+                          <>
+                            <CheckCircle className="h-4 w-4 mr-2" />
+                            Confirmer ma présence
+                          </>
+                        )}
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          </Card>
+        )}
+
+        {/* Appointment History */}
+        {booking.appointmentHistory && booking.appointmentHistory.length > 0 && (
+          <Card className="p-6 md:p-8 mb-6">
+            <Collapsible open={historyOpen} onOpenChange={setHistoryOpen}>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <History className="h-5 w-5 text-muted-foreground" />
+                  <h2 className="text-xl font-semibold">
+                    Historique des modifications
+                  </h2>
+                  <Badge variant="secondary" className="ml-2">
+                    {booking.appointmentHistory.length}
+                  </Badge>
+                </div>
+                <CollapsibleTrigger asChild>
+                  <Button variant="ghost" size="sm" className="w-9 p-0">
+                    <ChevronDown
+                      className={cn(
+                        "h-4 w-4 transition-transform",
+                        historyOpen && "rotate-180"
+                      )}
+                    />
+                    <span className="sr-only">Toggle history</span>
+                  </Button>
+                </CollapsibleTrigger>
+              </div>
+
+              <CollapsibleContent className="mt-4">
+                <div className="space-y-3">
+                  {booking.appointmentHistory
+                    .slice()
+                    .reverse()
+                    .map((entry, index) => {
+                      const entryDate = new Date(entry.timestamp);
+                      
+                      // Format action text
+                      let actionText = "";
+                      if (entry.action === "confirm_pickup") {
+                        actionText = "a confirmé sa présence au rendez-vous de remise";
+                      } else if (entry.action === "confirm_delivery") {
+                        actionText = "a confirmé sa présence au rendez-vous de livraison";
+                      } else if (entry.action === "update") {
+                        actionText = "a modifié le rendez-vous";
+                      }
+
+                      return (
+                        <div
+                          key={`${entry.timestamp}-${index}`}
+                          className="flex items-start gap-3 p-3 bg-muted/30 rounded-lg"
+                        >
+                          <div className="flex-shrink-0 mt-0.5">
+                            <div className="h-2 w-2 rounded-full bg-primary" />
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <div className="text-sm">
+                              <span className="font-medium">
+                                {entry.actor === booking.senderId
+                                  ? "L'expéditeur"
+                                  : entry.actor === booking.trip?.travelerId
+                                  ? "Le voyageur"
+                                  : "Système"}
+                              </span>{" "}
+                              {actionText}
+                            </div>
+                            {entry.changes && Object.keys(entry.changes).length > 0 && (
+                              <div className="mt-1 text-xs text-muted-foreground">
+                                {Object.entries(entry.changes).map(([key, value]) => {
+                                  let label = key;
+                                  if (key === "pickupLocation") label = "Lieu de remise";
+                                  else if (key === "pickupDateTime") label = "Date de remise";
+                                  else if (key === "deliveryLocation") label = "Lieu de livraison";
+                                  else if (key === "deliveryDateTime") label = "Date de livraison";
+                                  
+                                  let displayValue = value;
+                                  if (key.includes("DateTime") && value) {
+                                    displayValue = format(new Date(value as string), "PPP 'à' HH:mm", { locale: fr });
+                                  }
+                                  
+                                  return (
+                                    <div key={key}>
+                                      {label}: {displayValue || "Supprimé"}
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+                            <div className="mt-1 text-xs text-muted-foreground">
+                              {format(entryDate, "PPP 'à' HH:mm", { locale: fr })}
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                </div>
+              </CollapsibleContent>
+            </Collapsible>
+          </Card>
+        )}
+
         {/* PINs */}
         {(booking.pickupPIN || booking.deliveryPIN) && (
           <Card className="p-6 md:p-8 mb-6">
@@ -351,16 +728,39 @@ export default function BookingDetails() {
               )}
             </div>
 
-            {isTraveler && (
-              <div className="mt-4">
-                <Button
-                  onClick={() => setShowPinDialog(true)}
-                  data-testid="button-verify-pin"
-                >
-                  Verify PIN & Update Status
-                </Button>
-              </div>
-            )}
+            {isTraveler && (() => {
+              // Determine which action we're about to do
+              const action = booking.status === "pending" || booking.status === "confirmed"
+                ? "pickup"
+                : "delivery";
+              
+              // Check if appointment confirmation is required
+              const needsPickupConfirmation = !!(booking.pickupDateTime && !booking.pickupConfirmedAt);
+              const needsDeliveryConfirmation = !!(booking.deliveryDateTime && !booking.deliveryConfirmedAt);
+              
+              const isBlocked = 
+                (action === "pickup" && needsPickupConfirmation) ||
+                (action === "delivery" && needsDeliveryConfirmation);
+              
+              return (
+                <div className="mt-4 space-y-3">
+                  {isBlocked && (
+                    <div className="p-3 bg-amber-50 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800 rounded-lg text-sm">
+                      <p className="text-amber-900 dark:text-amber-200">
+                        ⚠️ Vous devez d'abord confirmer votre présence au rendez-vous de {action === "pickup" ? "remise" : "livraison"} avant de valider le code PIN.
+                      </p>
+                    </div>
+                  )}
+                  <Button
+                    onClick={() => setShowPinDialog(true)}
+                    disabled={isBlocked}
+                    data-testid="button-verify-pin"
+                  >
+                    Verify PIN & Update Status
+                  </Button>
+                </div>
+              );
+            })()}
           </Card>
         )}
 

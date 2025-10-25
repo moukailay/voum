@@ -450,6 +450,150 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   );
 
+  // Update appointment (location and/or datetime)
+  app.patch(
+    "/api/bookings/:id/appointment",
+    isAuthenticated,
+    async (req: any, res) => {
+      try {
+        const userId = req.user.claims.sub;
+        const booking = await storage.getBooking(req.params.id);
+
+        if (!booking) {
+          return res.status(404).json({ message: "Booking not found" });
+        }
+
+        // Only sender can update appointment
+        if (booking.senderId !== userId) {
+          return res.status(403).json({ message: "Unauthorized" });
+        }
+
+        const { pickupLocation, pickupDateTime, deliveryLocation, deliveryDateTime } = req.body;
+
+        // Validate appointment dates against trip dates if provided
+        if (pickupDateTime || deliveryDateTime) {
+          const trip = await storage.getTrip(booking.tripId);
+          if (!trip) {
+            return res.status(404).json({ message: "Trip not found" });
+          }
+
+          if (pickupDateTime) {
+            const pickupDate = new Date(pickupDateTime);
+            const departureDate = new Date(trip.departureDate);
+            const arrivalDate = new Date(trip.arrivalDate);
+
+            if (pickupDate < departureDate || pickupDate > arrivalDate) {
+              return res.status(400).json({
+                message: "La date de remise doit être entre la date de départ et d'arrivée du voyage"
+              });
+            }
+          }
+
+          if (deliveryDateTime) {
+            const deliveryDate = new Date(deliveryDateTime);
+            const departureDate = new Date(trip.departureDate);
+            const arrivalDate = new Date(trip.arrivalDate);
+
+            if (deliveryDate < departureDate || deliveryDate > arrivalDate) {
+              return res.status(400).json({
+                message: "La date de livraison doit être entre la date de départ et d'arrivée du voyage"
+              });
+            }
+          }
+        }
+
+        const updates: any = {};
+        if (pickupLocation !== undefined) updates.pickupLocation = pickupLocation;
+        if (pickupDateTime !== undefined) updates.pickupDateTime = new Date(pickupDateTime);
+        if (deliveryLocation !== undefined) updates.deliveryLocation = deliveryLocation;
+        if (deliveryDateTime !== undefined) updates.deliveryDateTime = deliveryDateTime ? new Date(deliveryDateTime) : null;
+
+        const updatedBooking = await storage.updateBookingAppointment(
+          booking.id,
+          updates,
+          userId
+        );
+
+        res.json(updatedBooking);
+      } catch (error) {
+        console.error("Error updating appointment:", error);
+        res.status(500).json({ message: "Failed to update appointment" });
+      }
+    }
+  );
+
+  // Confirm pickup appointment presence
+  app.post(
+    "/api/bookings/:id/confirm-pickup",
+    isAuthenticated,
+    async (req: any, res) => {
+      try {
+        const userId = req.user.claims.sub;
+        const booking = await storage.getBooking(req.params.id);
+
+        if (!booking) {
+          return res.status(404).json({ message: "Booking not found" });
+        }
+
+        const trip = await storage.getTrip(booking.tripId);
+        if (!trip) {
+          return res.status(404).json({ message: "Trip not found" });
+        }
+
+        // Both sender and traveler can confirm pickup
+        if (booking.senderId !== userId && trip.travelerId !== userId) {
+          return res.status(403).json({ message: "Unauthorized" });
+        }
+
+        const updatedBooking = await storage.confirmPickupAppointment(
+          booking.id,
+          userId
+        );
+
+        res.json(updatedBooking);
+      } catch (error) {
+        console.error("Error confirming pickup:", error);
+        res.status(500).json({ message: "Failed to confirm pickup" });
+      }
+    }
+  );
+
+  // Confirm delivery appointment presence
+  app.post(
+    "/api/bookings/:id/confirm-delivery",
+    isAuthenticated,
+    async (req: any, res) => {
+      try {
+        const userId = req.user.claims.sub;
+        const booking = await storage.getBooking(req.params.id);
+
+        if (!booking) {
+          return res.status(404).json({ message: "Booking not found" });
+        }
+
+        const trip = await storage.getTrip(booking.tripId);
+        if (!trip) {
+          return res.status(404).json({ message: "Trip not found" });
+        }
+
+        // Both sender and traveler can confirm delivery
+        if (booking.senderId !== userId && trip.travelerId !== userId) {
+          return res.status(403).json({ message: "Unauthorized" });
+        }
+
+        const updatedBooking = await storage.confirmDeliveryAppointment(
+          booking.id,
+          userId
+        );
+
+        res.json(updatedBooking);
+      } catch (error) {
+        console.error("Error confirming delivery:", error);
+        res.status(500).json({ message: "Failed to confirm delivery" });
+      }
+    }
+  );
+
   // ==================== Message Routes ====================
   app.get("/api/messages/conversations", isAuthenticated, async (req: any, res) => {
     try {

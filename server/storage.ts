@@ -58,6 +58,24 @@ export interface IStorage {
     id: string,
     escrowStatus: string
   ): Promise<Booking | undefined>;
+  confirmPickupAppointment(
+    bookingId: string,
+    userId: string
+  ): Promise<Booking | undefined>;
+  confirmDeliveryAppointment(
+    bookingId: string,
+    userId: string
+  ): Promise<Booking | undefined>;
+  updateBookingAppointment(
+    bookingId: string,
+    updates: {
+      pickupLocation?: string;
+      pickupDateTime?: Date;
+      deliveryLocation?: string | null;
+      deliveryDateTime?: Date | null;
+    },
+    userId: string
+  ): Promise<Booking | undefined>;
 
   // Message operations
   createMessage(message: InsertMessage): Promise<Message>;
@@ -192,12 +210,34 @@ export class DatabaseStorage implements IStorage {
 
   // ========== Booking Operations ==========
   async createBooking(bookingData: InsertBooking): Promise<Booking> {
+    const initialHistory: Array<{
+      timestamp: string;
+      actor: string;
+      action: string;
+      changes: Record<string, any>;
+    }> = [];
+
+    if (bookingData.pickupLocation || bookingData.pickupDateTime) {
+      initialHistory.push({
+        timestamp: new Date().toISOString(),
+        actor: bookingData.senderId,
+        action: "created",
+        changes: {
+          pickupLocation: bookingData.pickupLocation,
+          pickupDateTime: bookingData.pickupDateTime?.toISOString(),
+          deliveryLocation: bookingData.deliveryLocation,
+          deliveryDateTime: bookingData.deliveryDateTime?.toISOString(),
+        },
+      });
+    }
+
     const [booking] = await db
       .insert(bookings)
       .values({
         ...bookingData,
         pickupPIN: Math.floor(100000 + Math.random() * 900000).toString(),
         deliveryPIN: Math.floor(100000 + Math.random() * 900000).toString(),
+        appointmentHistory: initialHistory as any,
         // status defaults to "pending" per schema
       })
       .returning();
@@ -248,6 +288,112 @@ export class DatabaseStorage implements IStorage {
       .update(bookings)
       .set({ escrowStatus: escrowStatus as any, updatedAt: new Date() })
       .where(eq(bookings.id, id))
+      .returning();
+    return booking;
+  }
+
+  async confirmPickupAppointment(
+    bookingId: string,
+    userId: string
+  ): Promise<Booking | undefined> {
+    const existing = await this.getBooking(bookingId);
+    if (!existing) return undefined;
+
+    const history = (existing.appointmentHistory as any[]) || [];
+    history.push({
+      timestamp: new Date().toISOString(),
+      actor: userId,
+      action: "confirm_pickup",
+      changes: { pickupConfirmedAt: new Date().toISOString() },
+    });
+
+    const [booking] = await db
+      .update(bookings)
+      .set({
+        pickupConfirmedAt: new Date(),
+        appointmentHistory: history as any,
+        updatedAt: new Date(),
+      })
+      .where(eq(bookings.id, bookingId))
+      .returning();
+    return booking;
+  }
+
+  async confirmDeliveryAppointment(
+    bookingId: string,
+    userId: string
+  ): Promise<Booking | undefined> {
+    const existing = await this.getBooking(bookingId);
+    if (!existing) return undefined;
+
+    const history = (existing.appointmentHistory as any[]) || [];
+    history.push({
+      timestamp: new Date().toISOString(),
+      actor: userId,
+      action: "confirm_delivery",
+      changes: { deliveryConfirmedAt: new Date().toISOString() },
+    });
+
+    const [booking] = await db
+      .update(bookings)
+      .set({
+        deliveryConfirmedAt: new Date(),
+        appointmentHistory: history as any,
+        updatedAt: new Date(),
+      })
+      .where(eq(bookings.id, bookingId))
+      .returning();
+    return booking;
+  }
+
+  async updateBookingAppointment(
+    bookingId: string,
+    updates: {
+      pickupLocation?: string;
+      pickupDateTime?: Date;
+      deliveryLocation?: string | null;
+      deliveryDateTime?: Date | null;
+    },
+    userId: string
+  ): Promise<Booking | undefined> {
+    const existing = await this.getBooking(bookingId);
+    if (!existing) return undefined;
+
+    const history = (existing.appointmentHistory as any[]) || [];
+    history.push({
+      timestamp: new Date().toISOString(),
+      actor: userId,
+      action: "update_appointment",
+      changes: {
+        pickupLocation: updates.pickupLocation,
+        pickupDateTime: updates.pickupDateTime?.toISOString(),
+        deliveryLocation: updates.deliveryLocation,
+        deliveryDateTime: updates.deliveryDateTime?.toISOString(),
+      },
+    });
+
+    const updateData: any = {
+      appointmentHistory: history,
+      updatedAt: new Date(),
+    };
+
+    if (updates.pickupLocation !== undefined) {
+      updateData.pickupLocation = updates.pickupLocation;
+    }
+    if (updates.pickupDateTime !== undefined) {
+      updateData.pickupDateTime = updates.pickupDateTime;
+    }
+    if (updates.deliveryLocation !== undefined) {
+      updateData.deliveryLocation = updates.deliveryLocation;
+    }
+    if (updates.deliveryDateTime !== undefined) {
+      updateData.deliveryDateTime = updates.deliveryDateTime;
+    }
+
+    const [booking] = await db
+      .update(bookings)
+      .set(updateData)
+      .where(eq(bookings.id, bookingId))
       .returning();
     return booking;
   }

@@ -113,6 +113,18 @@ export const bookings = pgTable("bookings", {
   })
     .notNull()
     .default("held"),
+  pickupLocation: text("pickup_location"),
+  pickupDateTime: timestamp("pickup_datetime"),
+  deliveryLocation: text("delivery_location"),
+  deliveryDateTime: timestamp("delivery_datetime"),
+  pickupConfirmedAt: timestamp("pickup_confirmed_at"),
+  deliveryConfirmedAt: timestamp("delivery_confirmed_at"),
+  appointmentHistory: jsonb("appointment_history").$type<Array<{
+    timestamp: string;
+    actor: string;
+    action: string;
+    changes: Record<string, any>;
+  }>>().default(sql`'[]'::jsonb`),
   createdAt: timestamp("created_at").defaultNow(),
   updatedAt: timestamp("updated_at").defaultNow(),
 });
@@ -125,6 +137,9 @@ export const insertBookingSchema = createInsertSchema(bookings).omit({
   deliveryPIN: true,
   escrowStatus: true,
   status: true,
+  pickupConfirmedAt: true,
+  deliveryConfirmedAt: true,
+  appointmentHistory: true,
 });
 
 export type InsertBooking = z.infer<typeof insertBookingSchema>;

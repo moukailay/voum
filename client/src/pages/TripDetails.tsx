@@ -186,103 +186,108 @@ export default function TripDetails() {
   const totalPrice = weight ? (Number(weight) * Number(trip.pricePerKg)).toFixed(2) : "0.00";
 
   return (
-    <div className="pb-20 md:pb-8">
-      <div className="max-w-4xl mx-auto px-4 md:px-8 py-8 md:py-12">
+    <div className="pb-24 md:pb-8">
+      <div className="max-w-4xl mx-auto px-4 md:px-6 py-6 md:py-12">
         {/* Route Header */}
-        <Card className="p-6 md:p-8 mb-6">
-          <div className="flex items-start justify-between mb-6">
-            <div className="flex-1">
-              <div className="flex items-center gap-3 mb-2">
-                <MapPin className="h-5 w-5 text-primary flex-shrink-0" />
-                <h1 className="text-2xl md:text-3xl font-bold">
-                  {trip.departureCity}
-                </h1>
+        <Card className="p-4 md:p-6 mb-4 md:mb-6">
+          <div className="space-y-4 md:space-y-6">
+            {/* Route with price */}
+            <div className="flex items-start justify-between gap-4">
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 mb-2">
+                  <MapPin className="h-5 w-5 text-primary flex-shrink-0" />
+                  <h1 className="text-xl md:text-3xl font-bold truncate">
+                    {trip.departureCity}
+                  </h1>
+                </div>
+                <div className="flex items-center gap-2">
+                  <ArrowRight className="h-5 w-5 text-muted-foreground flex-shrink-0" />
+                  <h2 className="text-lg md:text-2xl font-semibold text-muted-foreground truncate">
+                    {trip.destinationCity}
+                  </h2>
+                </div>
               </div>
-              <div className="flex items-center gap-3">
-                <ArrowRight className="h-5 w-5 text-muted-foreground ml-5 flex-shrink-0" />
-                <h2 className="text-xl md:text-2xl font-semibold text-muted-foreground">
-                  {trip.destinationCity}
-                </h2>
+              <div className="text-right flex-shrink-0">
+                <div className="text-2xl md:text-3xl font-bold text-primary whitespace-nowrap">
+                  {Number(trip.pricePerKg).toFixed(2)}€
+                </div>
+                <div className="text-sm text-muted-foreground">per kg</div>
               </div>
             </div>
-            <div className="text-right">
-              <div className="text-3xl font-bold text-primary">
-                {Number(trip.pricePerKg).toFixed(2)}€
-              </div>
-              <div className="text-sm text-muted-foreground">per kg</div>
-            </div>
-          </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div className="flex items-center gap-3">
-              <Calendar className="h-5 w-5 text-muted-foreground" />
-              <div>
-                <div className="text-xs text-muted-foreground">Departure</div>
-                <div className="text-sm font-medium">{departureDate}</div>
+            {/* Status badge */}
+            {trip.status === "active" && (
+              <Badge className="bg-chart-3 text-white" data-testid="badge-trip-status">
+                <CheckCircle className="h-3 w-3 mr-1" />
+                Available
+              </Badge>
+            )}
+
+            {/* Trip info grid - Mobile optimized */}
+            <div className="grid grid-cols-1 gap-3 md:gap-4">
+              <div className="flex items-start gap-3 p-3 bg-muted/30 rounded-lg">
+                <Calendar className="h-5 w-5 text-muted-foreground flex-shrink-0 mt-0.5" />
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm text-muted-foreground mb-1">Departure</div>
+                  <div className="font-medium leading-snug">{departureDate}</div>
+                </div>
               </div>
-            </div>
-            <div className="flex items-center gap-3">
-              <Calendar className="h-5 w-5 text-muted-foreground" />
-              <div>
-                <div className="text-xs text-muted-foreground">Arrival</div>
-                <div className="text-sm font-medium">{arrivalDate}</div>
+              <div className="flex items-start gap-3 p-3 bg-muted/30 rounded-lg">
+                <Calendar className="h-5 w-5 text-muted-foreground flex-shrink-0 mt-0.5" />
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm text-muted-foreground mb-1">Arrival</div>
+                  <div className="font-medium leading-snug">{arrivalDate}</div>
+                </div>
               </div>
-            </div>
-            <div className="flex items-center gap-3">
-              <Weight className="h-5 w-5 text-muted-foreground" />
-              <div>
-                <div className="text-xs text-muted-foreground">Available</div>
-                <div className="text-sm font-medium">
-                  {Number(trip.availableWeight).toFixed(1)}kg
+              <div className="flex items-start gap-3 p-3 bg-muted/30 rounded-lg">
+                <Weight className="h-5 w-5 text-muted-foreground flex-shrink-0 mt-0.5" />
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm text-muted-foreground mb-1">Available Weight</div>
+                  <div className="text-lg font-bold text-primary">
+                    {Number(trip.availableWeight).toFixed(1)}kg
+                  </div>
                 </div>
               </div>
             </div>
           </div>
-
-          {trip.status === "active" && (
-            <Badge className="mt-4 bg-chart-3 text-white">
-              <CheckCircle className="h-3 w-3 mr-1" />
-              Available
-            </Badge>
-          )}
         </Card>
 
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 md:gap-6">
           {/* Traveler Info */}
           <div className="md:col-span-1">
-            <Card className="p-6">
+            <Card className="p-4 md:p-6">
               <h3 className="text-lg font-semibold mb-4">Traveler</h3>
               {trip.traveler && (
                 <div className="space-y-4">
                   <div className="flex items-center gap-3">
-                    <Avatar className="h-16 w-16">
+                    <Avatar className="h-16 w-16 flex-shrink-0">
                       <AvatarImage src={trip.traveler.profileImageUrl || undefined} />
-                      <AvatarFallback>
+                      <AvatarFallback className="text-lg">
                         {trip.traveler.firstName?.[0] || trip.traveler.email?.[0] || "U"}
                       </AvatarFallback>
                     </Avatar>
-                    <div>
-                      <div className="font-semibold">
+                    <div className="flex-1 min-w-0">
+                      <div className="font-semibold truncate">
                         {trip.traveler.firstName && trip.traveler.lastName
                           ? `${trip.traveler.firstName} ${trip.traveler.lastName}`
                           : trip.traveler.email}
                       </div>
                       <div className="flex items-center gap-1 text-sm text-muted-foreground">
-                        <Star className="h-3 w-3 fill-amber-400 text-amber-400" />
+                        <Star className="h-4 w-4 fill-amber-400 text-amber-400 flex-shrink-0" />
                         <span>{Number(trip.traveler.rating || 0).toFixed(1)}</span>
                       </div>
                     </div>
                   </div>
 
-                  <div className="space-y-2 text-sm">
-                    <div>
-                      <span className="text-muted-foreground">Trips as traveler:</span>
-                      <span className="ml-2 font-medium">
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm text-muted-foreground">Trips completed:</span>
+                      <span className="font-semibold">
                         {trip.traveler.totalTripsAsTravel || 0}
                       </span>
                     </div>
                     {trip.traveler.isVerified && (
-                      <Badge variant="outline" className="text-chart-3 border-chart-3">
+                      <Badge variant="outline" className="text-chart-3 border-chart-3 w-full justify-center">
                         <CheckCircle className="h-3 w-3 mr-1" />
                         Verified
                       </Badge>
@@ -290,7 +295,7 @@ export default function TripDetails() {
                   </div>
 
                   {!isOwnTrip && (
-                    <Button className="w-full" variant="outline">
+                    <Button className="w-full" variant="outline" data-testid="button-message-traveler">
                       <MessageCircle className="h-4 w-4 mr-2" />
                       Message
                     </Button>
@@ -301,31 +306,31 @@ export default function TripDetails() {
           </div>
 
           {/* Trip Details */}
-          <div className="md:col-span-2 space-y-6">
+          <div className="md:col-span-2 space-y-4">
             {trip.maxDimensions && (
-              <Card className="p-6">
+              <Card className="p-4 md:p-6">
                 <h3 className="text-lg font-semibold mb-3">
                   Maximum Dimensions
                 </h3>
-                <p className="text-muted-foreground">{trip.maxDimensions}</p>
+                <p className="leading-relaxed">{trip.maxDimensions}</p>
               </Card>
             )}
 
             {trip.acceptedItems && (
-              <Card className="p-6">
+              <Card className="p-4 md:p-6">
                 <h3 className="text-lg font-semibold mb-3">Accepted Items</h3>
-                <p className="text-muted-foreground whitespace-pre-wrap">
+                <p className="leading-relaxed whitespace-pre-wrap">
                   {trip.acceptedItems}
                 </p>
               </Card>
             )}
 
             {trip.restrictedItems && (
-              <Card className="p-6">
+              <Card className="p-4 md:p-6">
                 <h3 className="text-lg font-semibold mb-3">
                   Restricted Items
                 </h3>
-                <p className="text-muted-foreground whitespace-pre-wrap">
+                <p className="leading-relaxed whitespace-pre-wrap">
                   {trip.restrictedItems}
                 </p>
               </Card>
@@ -333,18 +338,20 @@ export default function TripDetails() {
           </div>
         </div>
 
-        {/* CTA */}
+        {/* CTA - Sticky on mobile, inline on desktop */}
         {!isOwnTrip && trip.status === "active" && (
-          <div className="fixed bottom-0 left-0 right-0 p-4 bg-card border-t border-card-border md:relative md:border-0 md:mt-8 md:p-0">
-            <Button
-              size="lg"
-              className="w-full"
-              onClick={() => setShowBookingDialog(true)}
-              data-testid="button-book-trip"
-            >
-              Book this trip
-              <ArrowRight className="ml-2 h-5 w-5" />
-            </Button>
+          <div className="fixed bottom-0 left-0 right-0 p-4 bg-background/95 backdrop-blur-sm border-t border-border shadow-lg md:relative md:bg-transparent md:backdrop-blur-none md:border-0 md:shadow-none md:mt-8 md:p-0 z-10">
+            <div className="max-w-4xl mx-auto">
+              <Button
+                size="lg"
+                className="w-full min-h-12"
+                onClick={() => setShowBookingDialog(true)}
+                data-testid="button-book-trip"
+              >
+                Book this trip
+                <ArrowRight className="ml-2 h-5 w-5" />
+              </Button>
+            </div>
           </div>
         )}
 

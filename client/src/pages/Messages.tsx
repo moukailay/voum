@@ -70,17 +70,13 @@ export default function Messages() {
 
   // Auto-select conversation from URL query parameter
   useEffect(() => {
-    console.log('[Messages] location:', location, 'search:', window.location.search);
     const searchParams = new URLSearchParams(window.location.search);
     const userIdParam = searchParams.get('userId');
-    console.log('[Messages] userIdParam from URL:', userIdParam);
     
     // Select conversation even if it doesn't exist yet (allows new conversations)
     if (userIdParam) {
-      console.log('[Messages] Setting selectedConversation to:', userIdParam);
       setSelectedConversation(userIdParam);
     } else if (!userIdParam && location === '/messages') {
-      console.log('[Messages] No userId in URL, clearing selection');
       setSelectedConversation(null);
     }
   }, [location]);

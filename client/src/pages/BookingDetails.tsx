@@ -15,6 +15,8 @@ import {
   ExternalLink,
   ChevronDown,
   History,
+  Download,
+  Bell,
 } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -79,6 +81,11 @@ export default function BookingDetails() {
 
   const { data: booking, isLoading } = useQuery<BookingWithDetails>({
     queryKey: ["/api/bookings", bookingId],
+    enabled: !!bookingId,
+  });
+
+  const { data: reminders } = useQuery<any[]>({
+    queryKey: ["/api/bookings", bookingId, "reminders"],
     enabled: !!bookingId,
   });
 
@@ -216,6 +223,17 @@ export default function BookingDetails() {
     const diffTime = appointmentDate.getTime() - now.getTime();
     const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
     return diffDays;
+  };
+
+  // Helper function to download .ics file
+  const downloadCalendar = (type: "pickup" | "delivery") => {
+    window.open(`/api/bookings/${bookingId}/calendar/${type}`, "_blank");
+  };
+
+  // Helper function to get reminders for appointment type
+  const getRemindersForType = (type: "pickup" | "delivery") => {
+    if (!reminders) return [];
+    return reminders.filter((r: any) => r.type === type);
   };
 
   return (
@@ -505,6 +523,47 @@ export default function BookingDetails() {
                         )}
                       </Button>
                     )}
+
+                    {/* Calendar Export Button */}
+                    <Button
+                      variant="outline"
+                      onClick={() => downloadCalendar("pickup")}
+                      className="w-full"
+                      data-testid="button-download-pickup-calendar"
+                    >
+                      <Download className="h-4 w-4 mr-2" />
+                      Ajouter au calendrier
+                    </Button>
+
+                    {/* Reminders Status */}
+                    {(() => {
+                      const pickupReminders = getRemindersForType("pickup");
+                      if (pickupReminders.length === 0) return null;
+
+                      return (
+                        <div className="space-y-2">
+                          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                            <Bell className="h-4 w-4" />
+                            <span className="font-medium">Rappels programmés</span>
+                          </div>
+                          <div className="flex flex-wrap gap-2">
+                            {pickupReminders.map((reminder: any) => (
+                              <Badge
+                                key={reminder.id}
+                                variant={reminder.status === "sent" ? "default" : "secondary"}
+                                className="text-xs"
+                                data-testid={`badge-reminder-${reminder.id}`}
+                              >
+                                {reminder.notificationType === "email" ? "📧" : "🔔"}{" "}
+                                {reminder.status === "sent" 
+                                  ? `Envoyé ${formatDistanceToNow(new Date(reminder.sentAt!), { addSuffix: true, locale: fr })}` 
+                                  : `T-${Math.floor((new Date(reminder.scheduledFor).getTime() - Date.now()) / (1000 * 60 * 60))}h`}
+                              </Badge>
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    })()}
                   </div>
                 </div>
               )}
@@ -595,6 +654,47 @@ export default function BookingDetails() {
                         )}
                       </Button>
                     )}
+
+                    {/* Calendar Export Button */}
+                    <Button
+                      variant="outline"
+                      onClick={() => downloadCalendar("delivery")}
+                      className="w-full"
+                      data-testid="button-download-delivery-calendar"
+                    >
+                      <Download className="h-4 w-4 mr-2" />
+                      Ajouter au calendrier
+                    </Button>
+
+                    {/* Reminders Status */}
+                    {(() => {
+                      const deliveryReminders = getRemindersForType("delivery");
+                      if (deliveryReminders.length === 0) return null;
+
+                      return (
+                        <div className="space-y-2">
+                          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                            <Bell className="h-4 w-4" />
+                            <span className="font-medium">Rappels programmés</span>
+                          </div>
+                          <div className="flex flex-wrap gap-2">
+                            {deliveryReminders.map((reminder: any) => (
+                              <Badge
+                                key={reminder.id}
+                                variant={reminder.status === "sent" ? "default" : "secondary"}
+                                className="text-xs"
+                                data-testid={`badge-reminder-${reminder.id}`}
+                              >
+                                {reminder.notificationType === "email" ? "📧" : "🔔"}{" "}
+                                {reminder.status === "sent" 
+                                  ? `Envoyé ${formatDistanceToNow(new Date(reminder.sentAt!), { addSuffix: true, locale: fr })}` 
+                                  : `T-${Math.floor((new Date(reminder.scheduledFor).getTime() - Date.now()) / (1000 * 60 * 60))}h`}
+                              </Badge>
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    })()}
                   </div>
                 </div>
               )}

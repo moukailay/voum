@@ -10,9 +10,13 @@ interface AppointmentReminders {
 
 /**
  * Calculate reminder times for a given appointment
+ * Returns reminders with explicit types (24h or 2h) to avoid mislabeling
  */
-export function calculateReminderTimes(appointmentDateTime: Date): Array<{ scheduledFor: Date }> {
-  const reminderTimes: Array<{ scheduledFor: Date }> = [];
+export function calculateReminderTimes(
+  appointmentDateTime: Date,
+  reminderPrefix: "pickup" | "delivery"
+): Array<{ scheduledFor: Date; type: string }> {
+  const reminderTimes: Array<{ scheduledFor: Date; type: string }> = [];
   
   // T-24h reminder
   const reminder24h = new Date(appointmentDateTime);
@@ -22,13 +26,19 @@ export function calculateReminderTimes(appointmentDateTime: Date): Array<{ sched
   const reminder2h = new Date(appointmentDateTime);
   reminder2h.setHours(reminder2h.getHours() - 2);
   
-  // Only schedule future reminders
+  // Only schedule future reminders, with explicit type labels
   const now = new Date();
   if (reminder24h > now) {
-    reminderTimes.push({ scheduledFor: reminder24h });
+    reminderTimes.push({ 
+      scheduledFor: reminder24h,
+      type: `${reminderPrefix}_24h`
+    });
   }
   if (reminder2h > now) {
-    reminderTimes.push({ scheduledFor: reminder2h });
+    reminderTimes.push({ 
+      scheduledFor: reminder2h,
+      type: `${reminderPrefix}_2h`
+    });
   }
   
   return reminderTimes;
@@ -49,13 +59,12 @@ export async function scheduleAppointmentReminders(
 
     // Schedule pickup reminders (sender)
     if (pickupDateTime) {
-      const pickupTimes = calculateReminderTimes(pickupDateTime);
-      pickupTimes.forEach((reminder, index) => {
-        const type = index === 0 ? "pickup_24h" : "pickup_2h";
+      const pickupTimes = calculateReminderTimes(pickupDateTime, "pickup");
+      pickupTimes.forEach((reminder) => {
         remindersToCreate.push({
           bookingId,
           userId: senderId,
-          type: type as "pickup_24h" | "pickup_2h",
+          type: reminder.type as "pickup_24h" | "pickup_2h",
           scheduledFor: reminder.scheduledFor,
           status: "pending" as const,
           notificationMethod: "both" as const,
@@ -65,13 +74,12 @@ export async function scheduleAppointmentReminders(
 
     // Schedule delivery reminders (traveler)
     if (deliveryDateTime) {
-      const deliveryTimes = calculateReminderTimes(deliveryDateTime);
-      deliveryTimes.forEach((reminder, index) => {
-        const type = index === 0 ? "delivery_24h" : "delivery_2h";
+      const deliveryTimes = calculateReminderTimes(deliveryDateTime, "delivery");
+      deliveryTimes.forEach((reminder) => {
         remindersToCreate.push({
           bookingId,
           userId: travelerId,
-          type: type as "delivery_24h" | "delivery_2h",
+          type: reminder.type as "delivery_24h" | "delivery_2h",
           scheduledFor: reminder.scheduledFor,
           status: "pending" as const,
           notificationMethod: "both" as const,
@@ -84,8 +92,8 @@ export async function scheduleAppointmentReminders(
       console.log(`[Reminder Scheduler] Scheduled ${remindersToCreate.length} reminders for booking ${bookingId}`);
     }
   } catch (error) {
-    console.error("[Reminder Scheduler] Error scheduling reminders:", error);
-    throw error;
+    // Log error but don't throw - reminder scheduling failures should not block booking creation
+    console.error("[Reminder Scheduler] Error scheduling reminders (non-blocking):", error);
   }
 }
 

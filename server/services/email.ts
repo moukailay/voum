@@ -36,16 +36,19 @@ export async function sendReminderEmail(data: ReminderEmailData): Promise<boolea
       ? `⏰ Rappel : Remise de colis dans ${timeLabels[type]}`
       : `⏰ Rappel : Livraison de colis dans ${timeLabels[type]}`;
 
+    // Format with explicit timezone to avoid UTC confusion
     const formattedDate = appointmentDetails.dateTime.toLocaleDateString("fr-FR", {
       weekday: "long",
       year: "numeric",
       month: "long",
       day: "numeric",
+      timeZone: "Europe/Paris",
     });
     
     const formattedTime = appointmentDetails.dateTime.toLocaleTimeString("fr-FR", {
       hour: "2-digit",
       minute: "2-digit",
+      timeZone: "Europe/Paris",
     });
 
     const html = `

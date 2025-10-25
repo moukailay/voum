@@ -255,6 +255,33 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return;
       }
 
+      // Validate appointment dates if provided
+      if (validatedData.pickupDateTime) {
+        const pickupDate = new Date(validatedData.pickupDateTime);
+        const departureDate = new Date(trip.departureDate);
+        const arrivalDate = new Date(trip.arrivalDate);
+
+        if (pickupDate < departureDate || pickupDate > arrivalDate) {
+          res.status(400).json({
+            message: "La date de remise doit être entre la date de départ et d'arrivée du voyage"
+          });
+          return;
+        }
+      }
+
+      if (validatedData.deliveryDateTime) {
+        const deliveryDate = new Date(validatedData.deliveryDateTime);
+        const departureDate = new Date(trip.departureDate);
+        const arrivalDate = new Date(trip.arrivalDate);
+
+        if (deliveryDate < departureDate || deliveryDate > arrivalDate) {
+          res.status(400).json({
+            message: "La date de livraison doit être entre la date de départ et d'arrivée du voyage"
+          });
+          return;
+        }
+      }
+
       // Validate available weight
       const requestedWeight = Number(validatedData.weight);
       const availableWeight = Number(trip.availableWeight);

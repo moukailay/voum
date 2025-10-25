@@ -94,7 +94,11 @@ export const bookings = pgTable("bookings", {
     .notNull()
     .references(() => users.id, { onDelete: "cascade" }),
   weight: decimal("weight", { precision: 6, scale: 2 }).notNull(),
-  description: text("description").notNull(),
+  description: text("description"),
+  senderName: varchar("sender_name"),
+  senderPhone: varchar("sender_phone"),
+  pickupAddress: text("pickup_address"),
+  deliveryAddress: text("delivery_address"),
   price: decimal("price", { precision: 10, scale: 2 }).notNull(),
   status: varchar("status", {
     enum: ["pending", "confirmed", "picked_up", "in_transit", "arrived", "delivered", "cancelled"],

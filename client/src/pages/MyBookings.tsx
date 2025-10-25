@@ -114,7 +114,7 @@ export default function MyBookings() {
   const { user } = useAuth();
 
   const { data: bookings, isLoading } = useQuery<BookingWithTrip[]>({
-    queryKey: ["/api/bookings"],
+    queryKey: ["/api/bookings/my-bookings"],
     enabled: !!user,
   });
 

@@ -402,7 +402,9 @@ export default function BookingDetails() {
                 <Button
                   onClick={() => {
                     const action =
-                      booking.status === "confirmed" ? "pickup" : "delivery";
+                      booking.status === "pending" || booking.status === "confirmed"
+                        ? "pickup"
+                        : "delivery";
                     verifyPinMutation.mutate({ pin, action });
                   }}
                   disabled={verifyPinMutation.isPending || pin.length !== 6}

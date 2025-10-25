@@ -197,6 +197,39 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
 
+  app.get("/api/trips/:id/bookings", isAuthenticated, async (req: any, res) => {
+    try {
+      const tripId = req.params.id;
+      const userId = req.user.claims.sub;
+
+      // Get trip to verify ownership
+      const trip = await storage.getTrip(tripId);
+      if (!trip) {
+        return res.status(404).json({ message: "Trip not found" });
+      }
+
+      // Only the traveler can view bookings for their trip
+      if (trip.travelerId !== userId) {
+        return res.status(403).json({ message: "Unauthorized" });
+      }
+
+      const bookings = await storage.getTripBookings(tripId);
+
+      // Fetch sender details for each booking
+      const bookingsWithDetails = await Promise.all(
+        bookings.map(async (booking) => {
+          const sender = await storage.getUser(booking.senderId);
+          return { ...booking, sender };
+        })
+      );
+
+      res.json(bookingsWithDetails);
+    } catch (error) {
+      console.error("Error fetching trip bookings:", error);
+      res.status(500).json({ message: "Failed to fetch bookings" });
+    }
+  });
+
   // ==================== Booking Routes ====================
   app.post("/api/bookings", isAuthenticated, async (req: any, res) => {
     try {

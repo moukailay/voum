@@ -369,8 +369,23 @@ export default function TripDetails() {
                   placeholder="Ex: 5"
                   value={weight}
                   onChange={(e) => {
-                    setWeight(e.target.value);
-                    if (errors.weight) setErrors({ ...errors, weight: undefined });
+                    const newWeight = e.target.value;
+                    setWeight(newWeight);
+                    
+                    // Real-time validation for weight
+                    const weightNum = Number(newWeight);
+                    const availableNum = Number(trip.availableWeight);
+                    
+                    if (!newWeight || weightNum <= 0) {
+                      setErrors({ ...errors, weight: undefined });
+                    } else if (weightNum > availableNum) {
+                      setErrors({ 
+                        ...errors, 
+                        weight: `Le poids maximum disponible est ${availableNum.toFixed(0)}kg` 
+                      });
+                    } else {
+                      setErrors({ ...errors, weight: undefined });
+                    }
                   }}
                   data-testid="input-booking-weight"
                   className={errors.weight ? "border-destructive" : ""}
@@ -459,7 +474,15 @@ export default function TripDetails() {
                 </Button>
                 <Button
                   onClick={handleBooking}
-                  disabled={bookingMutation.isPending || !weight || !senderName || !senderPhone}
+                  disabled={
+                    bookingMutation.isPending || 
+                    !weight || 
+                    !senderName || 
+                    !senderPhone || 
+                    !!errors.weight || 
+                    !!errors.senderName || 
+                    !!errors.senderPhone
+                  }
                   className="flex-1"
                   data-testid="button-confirm-booking"
                 >

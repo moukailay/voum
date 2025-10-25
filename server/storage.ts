@@ -198,7 +198,7 @@ export class DatabaseStorage implements IStorage {
         ...bookingData,
         pickupPIN: Math.floor(100000 + Math.random() * 900000).toString(),
         deliveryPIN: Math.floor(100000 + Math.random() * 900000).toString(),
-        status: "confirmed",
+        // status defaults to "pending" per schema
       })
       .returning();
     return booking;

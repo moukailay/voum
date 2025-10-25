@@ -30,7 +30,34 @@ Preferred communication style: Simple, everyday language.
   - **Issue 3:** Client-side date validation caused timezone conflicts
     - **Solution:** Removed client-side validation, delegated to server for consistent UTC handling
 - **E2E Tested:** Complete flow validated - booking creation with appointments → sender confirms pickup → traveler confirms delivery → pickup PIN → delivery PIN → status progression to delivered, history tracking verified
-- **Next Steps:** Implement automated T-24h/T-2h appointment reminders (cron jobs)
+
+### Automated Reminder System ✅ COMPLETED
+- **Goal:** Send automated email and in-app reminders at T-24h and T-2h before pickup/delivery appointments
+- **Backend:**
+  - **Schema:** Reminders table with booking_id, reminder_type (pickup_24h/pickup_2h/delivery_24h/delivery_2h), send_at, sent_at, status (pending/sent/failed)
+  - **Scheduler:** reminder-scheduler.ts creates 4 reminders per booking automatically
+  - **Cron Job:** Runs every 5 minutes, processes pending reminders, sends emails via Resend
+  - **Email Service:** Professional HTML templates with appointment details, Google Maps links, countdown
+  - **Calendar Export:** GET /api/bookings/:id/calendar/{pickup|delivery} generates .ics files with alarms
+- **Frontend:**
+  - **Reminder Status Badges:** Display T-24h/T-2h status (Programmé/Envoyé) on BookingDetails page
+  - **Calendar Download Buttons:** "Ajouter au calendrier" buttons for pickup and delivery appointments
+  - **Real-time Updates:** Reminders display shows current status from database
+- **Bug Fixes:**
+  - **Issue 1:** Missing imports in routes.ts
+    - **Solution:** Added imports for remindersTable and generateICSFile from calendar.ts
+  - **Issue 2:** generateICSFile API mismatch
+    - **Solution:** Corrected calendar routes to construct proper CalendarEventData objects with title, description, location, startDateTime, duration, organizer, attendees
+  - **Issue 3:** Reminder type column mismatch
+    - **Solution:** Changed reminder_type index to explicit pickup_24h/pickup_2h/delivery_24h/delivery_2h enum values
+  - **Issue 4:** Non-blocking error handling
+    - **Solution:** Added try-catch in cron job to prevent one failed reminder from stopping entire batch
+  - **Issue 5:** Timezone issues in emails
+    - **Solution:** All times converted to Europe/Paris timezone for display in emails
+- **Notes:** 
+  - Same-day trips (e.g., Paris→Lyon 04:30-12:30) show only one date in calendar picker - this is expected behavior
+  - Calendar displays all dates between trip departure and arrival for multi-day trips
+  - Date validation allows any time within trip window (inclusive bounds)
 
 ### Traveler Booking Management System
 - **Problem:** Travelers (mikhail09ther@gmail.com example) could create trips and see them booked, but had no way to access booking details or validate PIN codes for delivery confirmation.

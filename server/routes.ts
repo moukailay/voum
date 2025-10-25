@@ -10,7 +10,7 @@ import {
   insertMessageAttachmentSchema,
   trips,
   bookings as bookingsTable,
-  reminders,
+  reminders as remindersTable,
 } from "@shared/schema";
 import { z } from "zod";
 import {
@@ -23,7 +23,7 @@ import { filterContent, shouldBlockContent } from "./contentFilter";
 import { db } from "./db";
 import { eq } from "drizzle-orm";
 import { scheduleAppointmentReminders, cancelBookingReminders } from "./services/reminder-scheduler";
-import { generatePickupICS, generateDeliveryICS } from "./services/calendar";
+import { generateICSFile } from "./services/calendar";
 
 // Create API schemas that accept date strings and coerce numbers
 const createTripSchema = insertTripSchema
@@ -261,12 +261,13 @@ export async function registerRoutes(app: Express): Promise<Server> {
         return;
       }
 
-      // Validate appointment dates if provided
+      // Validate appointment dates if provided (allow times on same day as trip)
       if (validatedData.pickupDateTime) {
         const pickupDate = new Date(validatedData.pickupDateTime);
         const departureDate = new Date(trip.departureDate);
         const arrivalDate = new Date(trip.arrivalDate);
 
+        // For pickup: must be on or after departure, but before or at arrival
         if (pickupDate < departureDate || pickupDate > arrivalDate) {
           res.status(400).json({
             message: "La date de remise doit être entre la date de départ et d'arrivée du voyage"
@@ -280,6 +281,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const departureDate = new Date(trip.departureDate);
         const arrivalDate = new Date(trip.arrivalDate);
 
+        // For delivery: must be after departure, but on or before arrival
         if (deliveryDate < departureDate || deliveryDate > arrivalDate) {
           res.status(400).json({
             message: "La date de livraison doit être entre la date de départ et d'arrivée du voyage"
@@ -508,7 +510,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
         const { pickupLocation, pickupDateTime, deliveryLocation, deliveryDateTime } = req.body;
 
-        // Validate appointment dates against trip dates if provided
+        // Validate appointment dates against trip dates if provided (allow times on same day as trip)
         if (pickupDateTime || deliveryDateTime) {
           const trip = await storage.getTrip(booking.tripId);
           if (!trip) {
@@ -520,6 +522,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             const departureDate = new Date(trip.departureDate);
             const arrivalDate = new Date(trip.arrivalDate);
 
+            // For pickup: must be on or after departure, but before or at arrival
             if (pickupDate < departureDate || pickupDate > arrivalDate) {
               return res.status(400).json({
                 message: "La date de remise doit être entre la date de départ et d'arrivée du voyage"
@@ -532,6 +535,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
             const departureDate = new Date(trip.departureDate);
             const arrivalDate = new Date(trip.arrivalDate);
 
+            // For delivery: must be after departure, but on or before arrival
             if (deliveryDate < departureDate || deliveryDate > arrivalDate) {
               return res.status(400).json({
                 message: "La date de livraison doit être entre la date de départ et d'arrivée du voyage"
@@ -699,20 +703,41 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const sender = await storage.getUser(booking.senderId);
         const traveler = await storage.getUser(trip.travelerId);
 
-        const icsContent = generateICSFile({
-          type: "pickup",
-          booking,
-          trip,
-          sender,
-          traveler,
+        const senderName = sender.firstName && sender.lastName 
+          ? `${sender.firstName} ${sender.lastName}` 
+          : sender.email;
+        const travelerName = traveler.firstName && traveler.lastName 
+          ? `${traveler.firstName} ${traveler.lastName}` 
+          : traveler.email;
+
+        const result = generateICSFile({
+          title: `📦 Remise de colis - ${trip.departureCity} → ${trip.destinationCity}`,
+          description: `Remise de colis pour ParcelLink\n\nColis : ${booking.description || "Colis à livrer"}\nPoids : ${booking.weight}kg\n\nExpéditeur : ${senderName}\nVoyageur : ${travelerName}\n\nDétails : ${process.env.REPL_HOME || 'https://parcellink.replit.app'}/bookings/${booking.id}`,
+          location: booking.pickupLocation,
+          startDateTime: new Date(booking.pickupDateTime),
+          duration: 30, // 30 minutes par défaut
+          organizer: {
+            name: senderName,
+            email: sender.email,
+          },
+          attendees: [
+            {
+              name: travelerName,
+              email: traveler.email,
+            },
+          ],
         });
+
+        if (result.error) {
+          return res.status(500).json({ message: "Failed to generate calendar file" });
+        }
 
         res.setHeader("Content-Type", "text/calendar; charset=utf-8");
         res.setHeader(
           "Content-Disposition",
           `attachment; filename="parcellink-pickup-${booking.id}.ics"`
         );
-        res.send(icsContent);
+        res.send(result.value);
       } catch (error) {
         console.error("Error generating pickup calendar:", error);
         res.status(500).json({ message: "Failed to generate calendar file" });
@@ -750,20 +775,41 @@ export async function registerRoutes(app: Express): Promise<Server> {
         const sender = await storage.getUser(booking.senderId);
         const traveler = await storage.getUser(trip.travelerId);
 
-        const icsContent = generateICSFile({
-          type: "delivery",
-          booking,
-          trip,
-          sender,
-          traveler,
+        const senderName = sender.firstName && sender.lastName 
+          ? `${sender.firstName} ${sender.lastName}` 
+          : sender.email;
+        const travelerName = traveler.firstName && traveler.lastName 
+          ? `${traveler.firstName} ${traveler.lastName}` 
+          : traveler.email;
+
+        const result = generateICSFile({
+          title: `📦 Livraison de colis - ${trip.departureCity} → ${trip.destinationCity}`,
+          description: `Livraison de colis pour ParcelLink\n\nColis : ${booking.description || "Colis à livrer"}\nPoids : ${booking.weight}kg\n\nExpéditeur : ${senderName}\nVoyageur : ${travelerName}\n\nDétails : ${process.env.REPL_HOME || 'https://parcellink.replit.app'}/bookings/${booking.id}`,
+          location: booking.deliveryLocation,
+          startDateTime: new Date(booking.deliveryDateTime),
+          duration: 30, // 30 minutes par défaut
+          organizer: {
+            name: travelerName,
+            email: traveler.email,
+          },
+          attendees: [
+            {
+              name: senderName,
+              email: sender.email,
+            },
+          ],
         });
+
+        if (result.error) {
+          return res.status(500).json({ message: "Failed to generate calendar file" });
+        }
 
         res.setHeader("Content-Type", "text/calendar; charset=utf-8");
         res.setHeader(
           "Content-Disposition",
           `attachment; filename="parcellink-delivery-${booking.id}.ics"`
         );
-        res.send(icsContent);
+        res.send(result.value);
       } catch (error) {
         console.error("Error generating delivery calendar:", error);
         res.status(500).json({ message: "Failed to generate calendar file" });

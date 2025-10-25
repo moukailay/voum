@@ -85,6 +85,7 @@ export default function TripDetails() {
     },
     onSuccess: (data: any) => {
       queryClient.invalidateQueries({ queryKey: ["/api/bookings"] });
+      queryClient.invalidateQueries({ queryKey: ["/api/trips"] });
       queryClient.invalidateQueries({ queryKey: ["/api/messages/conversations"] });
       toast({
         title: "Réservation confirmée !",
@@ -243,9 +244,16 @@ export default function TripDetails() {
                 <Weight className="h-5 w-5 text-muted-foreground flex-shrink-0 mt-0.5" />
                 <div className="flex-1 min-w-0">
                   <div className="text-sm text-muted-foreground mb-1">Available Weight</div>
-                  <div className="text-lg font-bold text-primary">
-                    {Number(trip.availableWeight).toFixed(1)}kg
-                  </div>
+                  {Number(trip.availableWeight) === 0 ? (
+                    <div className="text-lg font-bold text-destructive">
+                      <span className="hidden sm:inline">Complet</span>
+                      <span className="sm:hidden">Plus de place</span>
+                    </div>
+                  ) : (
+                    <div className="text-lg font-bold text-primary">
+                      {Number(trip.availableWeight).toFixed(1)}kg
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -347,15 +355,27 @@ export default function TripDetails() {
         {!isOwnTrip && trip.status === "active" && (
           <div className="fixed bottom-0 left-0 right-0 p-4 bg-background/95 backdrop-blur-sm border-t border-border shadow-lg md:relative md:bg-transparent md:backdrop-blur-none md:border-0 md:shadow-none md:mt-8 md:p-0 z-10">
             <div className="max-w-4xl mx-auto">
-              <Button
-                size="lg"
-                className="w-full min-h-12"
-                onClick={() => setShowBookingDialog(true)}
-                data-testid="button-book-trip"
-              >
-                Book this trip
-                <ArrowRight className="ml-2 h-5 w-5" />
-              </Button>
+              {Number(trip.availableWeight) === 0 ? (
+                <Button
+                  size="lg"
+                  className="w-full min-h-12"
+                  disabled
+                  data-testid="button-book-trip"
+                >
+                  <span className="hidden sm:inline">Complet - Plus de place disponible</span>
+                  <span className="sm:hidden">Complet</span>
+                </Button>
+              ) : (
+                <Button
+                  size="lg"
+                  className="w-full min-h-12"
+                  onClick={() => setShowBookingDialog(true)}
+                  data-testid="button-book-trip"
+                >
+                  Book this trip
+                  <ArrowRight className="ml-2 h-5 w-5" />
+                </Button>
+              )}
             </div>
           </div>
         )}

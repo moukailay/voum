@@ -60,9 +60,16 @@ export function TripCard({ trip, traveler }: TripCardProps) {
                 {departureDate} - {arrivalDate}
               </span>
             </div>
-            <div className="flex items-center gap-1.5 text-muted-foreground flex-shrink-0">
-              <Weight className="h-4 w-4" />
-              <span className="font-medium">{Number(trip.availableWeight).toFixed(1)}kg</span>
+            <div className="flex items-center gap-1.5 flex-shrink-0">
+              <Weight className="h-4 w-4 text-muted-foreground" />
+              {Number(trip.availableWeight) === 0 ? (
+                <span className="font-semibold text-destructive">
+                  <span className="hidden sm:inline">Complet</span>
+                  <span className="sm:hidden">Plus de place</span>
+                </span>
+              ) : (
+                <span className="font-medium text-muted-foreground">{Number(trip.availableWeight).toFixed(1)}kg</span>
+              )}
             </div>
           </div>
 

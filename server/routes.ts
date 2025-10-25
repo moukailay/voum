@@ -409,6 +409,21 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return res.status(404).json({ message: "Booking not found" });
         }
 
+        // Check if appointment confirmation is required
+        if (action === "pickup") {
+          if (booking.pickupDateTime && !booking.pickupConfirmedAt) {
+            return res.status(400).json({ 
+              message: "Vous devez confirmer votre présence au rendez-vous de remise avant de valider le code PIN" 
+            });
+          }
+        } else if (action === "delivery") {
+          if (booking.deliveryDateTime && !booking.deliveryConfirmedAt) {
+            return res.status(400).json({ 
+              message: "Vous devez confirmer votre présence au rendez-vous de livraison avant de valider le code PIN" 
+            });
+          }
+        }
+
         // Verify PIN
         const isValid =
           (action === "pickup" && booking.pickupPIN === pin) ||

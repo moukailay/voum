@@ -632,6 +632,145 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   );
 
+  // Get reminders for a booking
+  app.get(
+    "/api/bookings/:id/reminders",
+    isAuthenticated,
+    async (req: any, res) => {
+      try {
+        const userId = req.user.claims.sub;
+        const booking = await storage.getBooking(req.params.id);
+
+        if (!booking) {
+          return res.status(404).json({ message: "Booking not found" });
+        }
+
+        const trip = await storage.getTrip(booking.tripId);
+        if (!trip) {
+          return res.status(404).json({ message: "Trip not found" });
+        }
+
+        // Only sender and traveler can view reminders
+        if (booking.senderId !== userId && trip.travelerId !== userId) {
+          return res.status(403).json({ message: "Unauthorized" });
+        }
+
+        const reminders = await db
+          .select()
+          .from(remindersTable)
+          .where(eq(remindersTable.bookingId, req.params.id))
+          .orderBy(remindersTable.scheduledFor);
+
+        res.json(reminders);
+      } catch (error) {
+        console.error("Error fetching reminders:", error);
+        res.status(500).json({ message: "Failed to fetch reminders" });
+      }
+    }
+  );
+
+  // Generate .ics file for pickup appointment
+  app.get(
+    "/api/bookings/:id/calendar/pickup",
+    isAuthenticated,
+    async (req: any, res) => {
+      try {
+        const userId = req.user.claims.sub;
+        const booking = await storage.getBooking(req.params.id);
+
+        if (!booking) {
+          return res.status(404).json({ message: "Booking not found" });
+        }
+
+        if (!booking.pickupDateTime || !booking.pickupLocation) {
+          return res.status(400).json({ message: "No pickup appointment scheduled" });
+        }
+
+        const trip = await storage.getTrip(booking.tripId);
+        if (!trip) {
+          return res.status(404).json({ message: "Trip not found" });
+        }
+
+        // Only sender and traveler can download calendar file
+        if (booking.senderId !== userId && trip.travelerId !== userId) {
+          return res.status(403).json({ message: "Unauthorized" });
+        }
+
+        const sender = await storage.getUser(booking.senderId);
+        const traveler = await storage.getUser(trip.travelerId);
+
+        const icsContent = generateICSFile({
+          type: "pickup",
+          booking,
+          trip,
+          sender,
+          traveler,
+        });
+
+        res.setHeader("Content-Type", "text/calendar; charset=utf-8");
+        res.setHeader(
+          "Content-Disposition",
+          `attachment; filename="parcellink-pickup-${booking.id}.ics"`
+        );
+        res.send(icsContent);
+      } catch (error) {
+        console.error("Error generating pickup calendar:", error);
+        res.status(500).json({ message: "Failed to generate calendar file" });
+      }
+    }
+  );
+
+  // Generate .ics file for delivery appointment
+  app.get(
+    "/api/bookings/:id/calendar/delivery",
+    isAuthenticated,
+    async (req: any, res) => {
+      try {
+        const userId = req.user.claims.sub;
+        const booking = await storage.getBooking(req.params.id);
+
+        if (!booking) {
+          return res.status(404).json({ message: "Booking not found" });
+        }
+
+        if (!booking.deliveryDateTime || !booking.deliveryLocation) {
+          return res.status(400).json({ message: "No delivery appointment scheduled" });
+        }
+
+        const trip = await storage.getTrip(booking.tripId);
+        if (!trip) {
+          return res.status(404).json({ message: "Trip not found" });
+        }
+
+        // Only sender and traveler can download calendar file
+        if (booking.senderId !== userId && trip.travelerId !== userId) {
+          return res.status(403).json({ message: "Unauthorized" });
+        }
+
+        const sender = await storage.getUser(booking.senderId);
+        const traveler = await storage.getUser(trip.travelerId);
+
+        const icsContent = generateICSFile({
+          type: "delivery",
+          booking,
+          trip,
+          sender,
+          traveler,
+        });
+
+        res.setHeader("Content-Type", "text/calendar; charset=utf-8");
+        res.setHeader(
+          "Content-Disposition",
+          `attachment; filename="parcellink-delivery-${booking.id}.ics"`
+        );
+        res.send(icsContent);
+      } catch (error) {
+        console.error("Error generating delivery calendar:", error);
+        res.status(500).json({ message: "Failed to generate calendar file" });
+      }
+    }
+  );
+
   // ==================== Message Routes ====================
   app.get("/api/messages/conversations", isAuthenticated, async (req: any, res) => {
     try {

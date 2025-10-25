@@ -114,7 +114,7 @@ export default function Search() {
             </div>
 
             {/* Clear filters button - Full width on mobile for better accessibility */}
-            <div className="mt-4">
+            <div className="mt-4 flex md:justify-end">
               <Button
                 onClick={() => {
                   setDepartureCity("");
@@ -123,7 +123,7 @@ export default function Search() {
                   setMinWeight("");
                 }}
                 variant="outline"
-                className="w-full md:w-auto md:ml-auto md:flex"
+                className="w-full md:w-auto"
                 data-testid="button-clear-filters"
               >
                 <SlidersHorizontal className="h-4 w-4 mr-2" />

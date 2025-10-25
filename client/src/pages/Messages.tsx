@@ -85,6 +85,16 @@ export default function Messages() {
     enabled: !!selectedConversation,
   });
 
+  // Fetch selected user data if not in conversations list (for new conversations)
+  const selectedUserFromConv = conversations?.find(
+    (c) => c.userId === selectedConversation
+  )?.user;
+
+  const { data: fetchedUser } = useQuery<User>({
+    queryKey: ["/api/users", selectedConversation],
+    enabled: !!selectedConversation && !selectedUserFromConv,
+  });
+
   // Initialize WebSocket connection
   useEffect(() => {
     if (!user) return;
@@ -438,9 +448,8 @@ export default function Messages() {
     }
   }, [messages, selectedConversation]);
 
-  const selectedUser = conversations?.find(
-    (c) => c.userId === selectedConversation
-  )?.user;
+  // Get selected user from conversations or fetch separately for new conversations
+  const selectedUser = selectedUserFromConv || fetchedUser;
 
   const isUserOnline = selectedConversation ? onlineUsers[selectedConversation] : false;
   const isOtherUserTyping = typingUsers.some((t) => t.userId === selectedConversation);

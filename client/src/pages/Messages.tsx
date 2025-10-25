@@ -48,7 +48,7 @@ interface AttachedFile {
 export default function Messages() {
   const { user } = useAuth();
   const { toast } = useToast();
-  const [location] = useLocation();
+  const [location, setLocation] = useLocation();
   const [selectedConversation, setSelectedConversation] = useState<string | null>(null);
   const [messageInput, setMessageInput] = useState("");
   const [messages, setMessages] = useState<MessageWithUsers[]>([]);
@@ -70,14 +70,20 @@ export default function Messages() {
 
   // Auto-select conversation from URL query parameter
   useEffect(() => {
-    const searchParams = new URLSearchParams(location.split('?')[1] || '');
+    console.log('[Messages] location:', location, 'search:', window.location.search);
+    const searchParams = new URLSearchParams(window.location.search);
     const userIdParam = searchParams.get('userId');
+    console.log('[Messages] userIdParam from URL:', userIdParam);
     
     // Select conversation even if it doesn't exist yet (allows new conversations)
-    if (userIdParam && selectedConversation !== userIdParam) {
+    if (userIdParam) {
+      console.log('[Messages] Setting selectedConversation to:', userIdParam);
       setSelectedConversation(userIdParam);
+    } else if (!userIdParam && location === '/messages') {
+      console.log('[Messages] No userId in URL, clearing selection');
+      setSelectedConversation(null);
     }
-  }, [location, selectedConversation]);
+  }, [location]);
 
   // Fetch messages for selected conversation
   const { data: conversationMessages } = useQuery<MessageWithUsers[]>({

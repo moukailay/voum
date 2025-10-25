@@ -8,6 +8,24 @@ Preferred communication style: Simple, everyday language.
 
 ## Recent Changes (October 25, 2025)
 
+### Traveler Booking Management System
+- **Problem:** Travelers (mikhail09ther@gmail.com example) could create trips and see them booked, but had no way to access booking details or validate PIN codes for delivery confirmation.
+- **Solution:**
+  - **Backend:** Added GET `/api/trips/:id/bookings` endpoint (traveler-only, returns bookings with sender details)
+  - **Backend:** Modified GET `/api/trips/my-trips` to include `bookingCount` for each trip
+  - **Frontend TripDetails:** Added "Réservations" section visible only to trip owner, displaying clickable booking cards with sender info, weight, price, and status badges
+  - **Frontend TripCard:** Added secondary badge showing booking count (e.g., "1 réservation") when bookingCount > 0
+  - **Frontend MyTrips:** Displays booking count indicator on trip cards
+  - **Navigation Flow:** MyTrips → Click trip → See bookings → Click booking → BookingDetails → Validate PINs
+- **Impact:** Travelers now have complete visibility and control over their trip bookings with clear path to PIN validation.
+- **E2E Tested:** Full workflow validated from trip creation → booking → traveler review → pickup PIN → delivery PIN → escrow release.
+
+### PIN-Based Delivery Confirmation System
+- **Fixed queryKey Bug:** MyBookings now uses correct queryKey `["/api/bookings/my-bookings"]` instead of `["/api/bookings"]`
+- **Fixed Action Logic:** BookingDetails correctly determines pickup vs delivery action (pending/confirmed → pickup, else → delivery)
+- **Status Flow:** pending → picked_up (after pickup PIN) → delivered (after delivery PIN) with automatic escrow release
+- **Mobile-First Design:** Large PIN display with copy buttons, responsive badges, touch targets ≥44px
+
 ### Messaging Navigation Fix
 - **Problem:** Message button in TripDetails created empty conversations instead of pre-selecting the correct conversation.
 - **Solution:** 

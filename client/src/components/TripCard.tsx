@@ -1,4 +1,4 @@
-import { MapPin, Calendar, Weight, DollarSign, Star } from "lucide-react";
+import { MapPin, Calendar, Weight, DollarSign, Star, Package } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
@@ -6,7 +6,7 @@ import { Link } from "wouter";
 import type { Trip, User } from "@shared/schema";
 
 interface TripCardProps {
-  trip: Trip;
+  trip: Trip & { bookingCount?: number };
   traveler?: User;
 }
 
@@ -73,12 +73,20 @@ export function TripCard({ trip, traveler }: TripCardProps) {
             </div>
           </div>
 
-          {/* Status Badge */}
-          {trip.status === "active" && (
-            <Badge variant="default" className="bg-chart-3 text-white">
-              Available
-            </Badge>
-          )}
+          {/* Status Badges */}
+          <div className="flex items-center gap-2 flex-wrap">
+            {trip.status === "active" && (
+              <Badge variant="default" className="bg-chart-3 text-white">
+                Available
+              </Badge>
+            )}
+            {trip.bookingCount !== undefined && trip.bookingCount > 0 && (
+              <Badge variant="secondary" data-testid={`badge-booking-count-${trip.id}`}>
+                <Package className="h-3 w-3 mr-1" />
+                {trip.bookingCount} {trip.bookingCount === 1 ? 'réservation' : 'réservations'}
+              </Badge>
+            )}
+          </div>
 
           {/* Traveler Info */}
           {traveler && (

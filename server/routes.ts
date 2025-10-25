@@ -9,6 +9,8 @@ import {
   insertMessageSchema,
   insertMessageAttachmentSchema,
   trips,
+  bookings as bookingsTable,
+  reminders,
 } from "@shared/schema";
 import { z } from "zod";
 import {
@@ -20,6 +22,8 @@ import { validateUploadedFile, validateFileMetadata } from "./fileValidator";
 import { filterContent, shouldBlockContent } from "./contentFilter";
 import { db } from "./db";
 import { eq } from "drizzle-orm";
+import { scheduleAppointmentReminders, cancelBookingReminders } from "./services/reminder-scheduler";
+import { generatePickupICS, generateDeliveryICS } from "./services/calendar";
 
 // Create API schemas that accept date strings and coerce numbers
 const createTripSchema = insertTripSchema
@@ -109,7 +113,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
       // Initialize availableWeight to maxWeight when creating a new trip
       const tripData = {
         ...validatedData,
-        availableWeight: validatedData.maxWeight,
+        maxWeight: validatedData.maxWeight.toString(),
+        availableWeight: validatedData.maxWeight.toString(),
+        pricePerKg: validatedData.pricePerKg.toString(),
       };
 
       const trip = await storage.createTrip(tripData);
@@ -335,6 +341,23 @@ export async function registerRoutes(app: Express): Promise<Server> {
         message: `Vous avez une nouvelle réservation pour ${trip.departureCity} → ${trip.destinationCity}`,
         relatedId: booking.id,
       });
+
+      // Schedule appointment reminders (T-24h and T-2h)
+      if (booking.pickupDateTime || booking.deliveryDateTime) {
+        try {
+          await scheduleAppointmentReminders(
+            booking.id,
+            userId,
+            trip.travelerId,
+            booking.pickupDateTime,
+            booking.deliveryDateTime
+          );
+          console.log(`[Reminders] Scheduled appointment reminders for booking ${booking.id}`);
+        } catch (error) {
+          console.error(`[Reminders] Error scheduling reminders for booking ${booking.id}:`, error);
+          // Don't fail the booking if reminder scheduling fails
+        }
+      }
 
       res.json({ 
         ...booking, 

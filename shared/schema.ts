@@ -388,6 +388,50 @@ export type InsertNotification = z.infer<typeof insertNotificationSchema>;
 export type Notification = typeof notifications.$inferSelect;
 
 // ============================================================================
+// Reminders table (for appointment reminders T-24h and T-2h)
+// ============================================================================
+export const reminders = pgTable("reminders", {
+  id: varchar("id").primaryKey().default(sql`gen_random_uuid()`),
+  bookingId: varchar("booking_id")
+    .notNull()
+    .references(() => bookings.id, { onDelete: "cascade" }),
+  userId: varchar("user_id")
+    .notNull()
+    .references(() => users.id, { onDelete: "cascade" }),
+  type: varchar("type", { enum: ["pickup_24h", "pickup_2h", "delivery_24h", "delivery_2h"] })
+    .notNull(),
+  scheduledFor: timestamp("scheduled_for").notNull(),
+  sentAt: timestamp("sent_at"),
+  status: varchar("status", { enum: ["pending", "sent", "failed", "cancelled"] })
+    .notNull()
+    .default("pending"),
+  notificationMethod: varchar("notification_method", { enum: ["in_app", "email", "both"] })
+    .notNull()
+    .default("both"),
+  emailSent: boolean("email_sent").default(false),
+  inAppSent: boolean("in_app_sent").default(false),
+  errorMessage: text("error_message"),
+  createdAt: timestamp("created_at").defaultNow(),
+},
+(table) => [
+  index("IDX_reminder_scheduled").on(table.scheduledFor),
+  index("IDX_reminder_status").on(table.status),
+  index("IDX_reminder_booking").on(table.bookingId),
+]);
+
+export const insertReminderSchema = createInsertSchema(reminders).omit({
+  id: true,
+  createdAt: true,
+  sentAt: true,
+  emailSent: true,
+  inAppSent: true,
+  errorMessage: true,
+});
+
+export type InsertReminder = z.infer<typeof insertReminderSchema>;
+export type Reminder = typeof reminders.$inferSelect;
+
+// ============================================================================
 // Relations
 // ============================================================================
 export const usersRelations = relations(users, ({ one, many }) => ({
@@ -396,6 +440,7 @@ export const usersRelations = relations(users, ({ one, many }) => ({
   sentMessages: many(messages, { relationName: "sentMessages" }),
   receivedMessages: many(messages, { relationName: "receivedMessages" }),
   notifications: many(notifications),
+  reminders: many(reminders),
   blockedByMe: many(blockedUsers, { relationName: "blockedByMe" }),
   blockingMe: many(blockedUsers, { relationName: "blockingMe" }),
   messageReports: many(messageReports),
@@ -422,6 +467,7 @@ export const bookingsRelations = relations(bookings, ({ one, many }) => ({
     references: [users.id],
   }),
   messages: many(messages),
+  reminders: many(reminders),
 }));
 
 export const messagesRelations = relations(messages, ({ one, many }) => ({
@@ -507,6 +553,17 @@ export const messageEventsRelations = relations(messageEvents, ({ one }) => ({
 export const notificationsRelations = relations(notifications, ({ one }) => ({
   user: one(users, {
     fields: [notifications.userId],
+    references: [users.id],
+  }),
+}));
+
+export const remindersRelations = relations(reminders, ({ one }) => ({
+  booking: one(bookings, {
+    fields: [reminders.bookingId],
+    references: [bookings.id],
+  }),
+  user: one(users, {
+    fields: [reminders.userId],
     references: [users.id],
   }),
 }));

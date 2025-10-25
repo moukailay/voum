@@ -89,11 +89,11 @@ export default function TripDetails() {
       queryClient.invalidateQueries({ queryKey: ["/api/messages/conversations"] });
       toast({
         title: "Réservation confirmée !",
-        description: "Votre colis a été réservé. Vous pouvez maintenant discuter avec le voyageur.",
+        description: "Consultez vos codes PIN dans 'Mes Réservations'",
       });
       setShowBookingDialog(false);
-      // Redirect to messages with the traveler's conversation
-      setLocation(`/messages?userId=${data.conversationUserId}`);
+      // Redirect to my bookings to see PINs
+      setLocation("/my-bookings");
     },
     onError: (error: Error) => {
       if (isUnauthorizedError(error)) {

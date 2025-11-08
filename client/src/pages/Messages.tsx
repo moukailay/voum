@@ -62,6 +62,8 @@ export default function Messages() {
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const typingCleanupIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const pendingMessagesRef = useRef<Map<string, boolean>>(new Map());
+  const messageInputRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Fetch conversations list
   const { data: conversations } = useQuery<Conversation[]>({
@@ -316,11 +318,20 @@ export default function Messages() {
     if (typingTimeoutRef.current) {
       clearTimeout(typingTimeoutRef.current);
     }
+    
+    // Restore focus to message input after sending
+    setTimeout(() => {
+      messageInputRef.current?.focus();
+    }, 0);
   };
 
   // Remove attached file
   const removeAttachedFile = (fileId: string) => {
     setAttachedFiles((prev) => prev.filter((f) => f.id !== fileId));
+    // Restore focus to message input after removing file
+    setTimeout(() => {
+      messageInputRef.current?.focus();
+    }, 0);
   };
 
   // Handle file input change (native input without modal)
@@ -421,6 +432,11 @@ export default function Messages() {
         title: "Succès",
         description: `${uploadedFiles.length} fichier(s) joint(s)`,
       });
+      
+      // Restore focus to message input after uploading files
+      setTimeout(() => {
+        messageInputRef.current?.focus();
+      }, 0);
     } catch (error) {
       console.error("Upload error:", error);
       toast({
@@ -801,8 +817,13 @@ export default function Messages() {
                               size="icon"
                               className="h-6 w-6 shrink-0"
                               onClick={() => removeAttachedFile(file.id)}
+                              onMouseDown={(e) => {
+                                // Prevent focus from leaving the text input
+                                e.preventDefault();
+                              }}
                               aria-label={`Retirer ${file.name}`}
                               data-testid={`button-remove-file-${file.id}`}
+                              tabIndex={-1}
                             >
                               <X className="h-3 w-3" />
                             </Button>
@@ -817,6 +838,7 @@ export default function Messages() {
                     <div className="flex gap-2 items-end">
                       {/* Hidden file input - Never gets focus automatically */}
                       <input
+                        ref={fileInputRef}
                         type="file"
                         id="file-input-hidden"
                         multiple
@@ -824,6 +846,7 @@ export default function Messages() {
                         className="hidden"
                         onChange={handleFileInputChange}
                         data-testid="input-file-hidden"
+                        tabIndex={-1}
                       />
                       
                       {/* Attach file button */}
@@ -833,9 +856,17 @@ export default function Messages() {
                         size="icon"
                         className="min-h-[44px] min-w-[44px] shrink-0"
                         disabled={attachedFiles.length >= 3}
-                        onClick={() => document.getElementById('file-input-hidden')?.click()}
+                        onClick={(e) => {
+                          e.preventDefault();
+                          fileInputRef.current?.click();
+                        }}
+                        onMouseDown={(e) => {
+                          // Prevent focus from leaving the text input
+                          e.preventDefault();
+                        }}
                         aria-label="Joindre un fichier"
                         data-testid="button-attach-file"
+                        tabIndex={0}
                       >
                         <Paperclip className="h-5 w-5" />
                       </Button>
@@ -844,6 +875,7 @@ export default function Messages() {
                       <div className="flex-1">
                         <div className="relative">
                           <Textarea
+                            ref={messageInputRef}
                             placeholder="Écrivez un message..."
                             value={messageInput}
                             onChange={(e) => {
@@ -856,11 +888,20 @@ export default function Messages() {
                                 sendMessage();
                               }
                             }}
+                            onBlur={(e) => {
+                              // Prevent blur if clicking on file input button
+                              const relatedTarget = e.relatedTarget as HTMLElement;
+                              if (relatedTarget?.getAttribute('data-testid') === 'button-attach-file') {
+                                e.preventDefault();
+                                setTimeout(() => messageInputRef.current?.focus(), 0);
+                              }
+                            }}
                             className={cn(
                               "min-h-[44px] max-h-[120px] resize-none text-base",
                               isMessageTooLong && "border-destructive focus-visible:ring-destructive"
                             )}
                             rows={1}
+                            autoFocus
                             data-testid="input-message"
                           />
                           <div className={cn(

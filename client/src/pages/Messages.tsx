@@ -106,8 +106,7 @@ export default function Messages() {
     const socket = new WebSocket(wsUrl);
 
     socket.onopen = () => {
-      console.log("WebSocket connected");
-      socket.send(JSON.stringify({ type: "auth", userId: user.id }));
+      console.log("WebSocket connected - authenticated via session");
     };
 
     socket.onmessage = (event) => {

@@ -2,7 +2,9 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { WebSocketServer, WebSocket } from "ws";
 import { storage } from "./storage";
-import { setupAuth, isAuthenticated } from "./replitAuth";
+import { setupAuth, isAuthenticated, getSession } from "./replitAuth";
+import cookie from "cookie";
+import type { IncomingMessage } from "http";
 import {
   insertTripSchema,
   insertBookingSchema,
@@ -1189,49 +1191,103 @@ export async function registerRoutes(app: Express): Promise<Server> {
   // ==================== WebSocket Server ====================
   const httpServer = createServer(app);
   const wss = new WebSocketServer({ server: httpServer, path: "/ws" });
+  
+  // Helper function to validate WebSocket session
+  const validateWebSocketSession = async (req: IncomingMessage): Promise<string | null> => {
+    try {
+      const cookies = cookie.parse(req.headers.cookie || "");
+      const sessionId = cookies["connect.sid"];
+      
+      if (!sessionId) {
+        console.log("WebSocket: No session cookie found");
+        return null;
+      }
+      
+      // Remove the signature prefix (s:) from the session ID
+      const unsignedSessionId = sessionId.startsWith("s:") 
+        ? sessionId.slice(2).split(".")[0] 
+        : sessionId;
+      
+      // Get session from store
+      return new Promise((resolve) => {
+        const sessionStore = (getSession() as any).store || (app as any)._router?.stack?.find((layer: any) => layer.name === "session")?.handle?.store;
+        
+        if (!sessionStore) {
+          console.error("WebSocket: Session store not found");
+          resolve(null);
+          return;
+        }
+        
+        sessionStore.get(unsignedSessionId, (err: any, session: any) => {
+          if (err || !session) {
+            console.log("WebSocket: Invalid session", err);
+            resolve(null);
+            return;
+          }
+          
+          // Get user ID from session passport data
+          const userId = session.passport?.user?.claims?.sub;
+          if (!userId) {
+            console.log("WebSocket: No user ID in session");
+            resolve(null);
+            return;
+          }
+          
+          resolve(userId);
+        });
+      });
+    } catch (error) {
+      console.error("WebSocket session validation error:", error);
+      return null;
+    }
+  };
 
-  wss.on("connection", (ws: WebSocket) => {
-    console.log("WebSocket client connected");
+  wss.on("connection", async (ws: WebSocket, req: IncomingMessage) => {
+    console.log("WebSocket client attempting connection");
+    
+    // Validate session before accepting connection
+    const userId = await validateWebSocketSession(req);
+    
+    if (!userId) {
+      console.log("WebSocket: Unauthorized connection attempt");
+      ws.send(JSON.stringify({ 
+        type: "error", 
+        message: "Unauthorized - Please log in" 
+      }));
+      ws.close(4401, "Unauthorized");
+      return;
+    }
+    
+    // Register authenticated client
+    clients.set(userId, { 
+      ws, 
+      userId,
+      onlineStatus: "online",
+      lastSeen: new Date(),
+    });
+    console.log(`User ${userId} authenticated via WebSocket session`);
+    
+    // Broadcast user online status
+    broadcastUserStatus(userId, "online");
+    
+    // Send current online users to the newly connected user
+    const onlineUsers = Array.from(clients.entries())
+      .filter(([_, client]) => client.onlineStatus === "online")
+      .map(([userId, _]) => userId);
+    
+    ws.send(JSON.stringify({
+      type: "online_users",
+      users: onlineUsers,
+    }));
 
     ws.on("message", async (data: Buffer) => {
       try {
         const message = JSON.parse(data.toString());
+        
+        // Get authenticated user (already validated during connection)
+        const senderId = userId;
 
-        // Handle authentication
-        if (message.type === "auth") {
-          clients.set(message.userId, { 
-            ws, 
-            userId: message.userId,
-            onlineStatus: "online",
-            lastSeen: new Date(),
-          });
-          console.log(`User ${message.userId} authenticated via WebSocket`);
-          
-          // Broadcast user online status
-          broadcastUserStatus(message.userId, "online");
-          
-          // Send current online users to the newly connected user
-          const onlineUsers = Array.from(clients.entries())
-            .filter(([_, client]) => client.onlineStatus === "online")
-            .map(([userId, _]) => userId);
-          
-          ws.send(JSON.stringify({
-            type: "online_users",
-            users: onlineUsers,
-          }));
-          
-          return;
-        }
-
-        // Get authenticated user
-        const senderId = Array.from(clients.entries()).find(
-          ([_, client]) => client.ws === ws
-        )?.[0];
-
-        if (!senderId) {
-          ws.send(JSON.stringify({ type: "error", message: "Not authenticated" }));
-          return;
-        }
+        // Sender ID is already validated from session
 
         // Handle typing indicator
         if (message.type === "typing") {

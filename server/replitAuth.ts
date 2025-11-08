@@ -64,11 +64,20 @@ async function upsertUser(claims: any) {
   });
 }
 
-export async function setupAuth(app: Express) {
+export interface AuthSetupResult {
+  sessionMiddleware: RequestHandler;
+  passportInitialize: RequestHandler;
+  passportSession: RequestHandler;
+}
+
+export async function setupAuth(app: Express): Promise<AuthSetupResult> {
   app.set("trust proxy", 1);
-  app.use(getSession());
-  app.use(passport.initialize());
-  app.use(passport.session());
+  const sessionMiddleware = getSession();
+  const passportInitialize = passport.initialize();
+  const passportSession = passport.session();
+  app.use(sessionMiddleware);
+  app.use(passportInitialize);
+  app.use(passportSession);
 
   const config = await getOidcConfig();
 
@@ -122,6 +131,7 @@ export async function setupAuth(app: Express) {
       );
     });
   });
+  return { sessionMiddleware, passportInitialize, passportSession };
 }
 
 export const isAuthenticated: RequestHandler = async (req, res, next) => {

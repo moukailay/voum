@@ -1,5 +1,6 @@
-import type { Express } from "express";
-import { createServer, type Server } from "http";
+import type { Express, RequestHandler } from "express";
+import { createServer } from "http";
+import type { Server, IncomingMessage } from "http";
 import { WebSocketServer, WebSocket } from "ws";
 import { storage } from "./storage";
 import { setupAuth, isAuthenticated } from "./replitAuth";
@@ -87,7 +88,7 @@ function broadcastTypingIndicator(senderId: string, receiverId: string, isTyping
 
 export async function registerRoutes(app: Express): Promise<Server> {
   // Setup authentication
-  await setupAuth(app);
+  const { sessionMiddleware, passportInitialize, passportSession } = await setupAuth(app);
 
   // ==================== Auth Routes ====================
   app.get("/api/auth/user", isAuthenticated, async (req: any, res) => {
@@ -1188,50 +1189,169 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // ==================== WebSocket Server ====================
   const httpServer = createServer(app);
-  const wss = new WebSocketServer({ server: httpServer, path: "/ws" });
+  const wss = new WebSocketServer({ noServer: true });
 
-  wss.on("connection", (ws: WebSocket) => {
-    console.log("WebSocket client connected");
+  httpServer.on("upgrade", (request, socket, head) => {
+    let pathname: string | null = null;
+    try {
+      const requestUrl = new URL(
+        request.url ?? "",
+        `http://${request.headers.host ?? "localhost"}`
+      );
+      pathname = requestUrl.pathname;
+    } catch {
+      socket.write("HTTP/1.1 400 Bad Request\r\n\r\n");
+      socket.destroy();
+      return;
+    }
+
+    if (pathname !== "/ws") {
+      socket.write("HTTP/1.1 404 Not Found\r\n\r\n");
+      socket.destroy();
+      return;
+    }
+
+    const allowedOrigins = (process.env.WS_ALLOWED_ORIGINS ?? "")
+      .split(",")
+      .map((origin) => origin.trim())
+      .filter(Boolean);
+    const originHeader = request.headers.origin;
+    if (
+      allowedOrigins.length > 0 &&
+      (!originHeader || !allowedOrigins.includes(originHeader))
+    ) {
+      socket.write("HTTP/1.1 403 Forbidden\r\n\r\n");
+      socket.destroy();
+      return;
+    }
+
+    const resShim = {
+      getHeader() {
+        return undefined;
+      },
+      setHeader() {
+        return;
+      },
+      removeHeader() {
+        return;
+      },
+      end() {
+        return;
+      },
+      writeHead() {
+        return this;
+      },
+    };
+
+    const runMiddleware = (middleware: RequestHandler) =>
+      new Promise<void>((resolve, reject) => {
+        middleware(request as any, resShim as any, (err: unknown) => {
+          if (err) {
+            reject(err);
+          } else {
+            resolve();
+          }
+        });
+      });
+
+    (async () => {
+      try {
+        await runMiddleware(sessionMiddleware);
+        await runMiddleware(passportInitialize);
+        await runMiddleware(passportSession);
+
+        const reqAny = request as any;
+        const isAuth =
+          typeof reqAny.isAuthenticated === "function" &&
+          reqAny.isAuthenticated();
+        const userId: string | undefined = reqAny.user?.claims?.sub;
+
+        if (!isAuth || !userId) {
+          socket.write("HTTP/1.1 401 Unauthorized\r\n\r\n");
+          socket.destroy();
+          return;
+        }
+
+        reqAny.authenticatedUserId = userId;
+
+        wss.handleUpgrade(request, socket, head, (ws) => {
+          wss.emit("connection", ws, request);
+        });
+      } catch (error) {
+        console.error("WebSocket upgrade error:", error);
+        socket.write("HTTP/1.1 500 Internal Server Error\r\n\r\n");
+        socket.destroy();
+      }
+    })();
+  });
+
+  wss.on("connection", (ws: WebSocket, request: IncomingMessage) => {
+    const reqAny = request as any;
+    const userId: string | undefined =
+      reqAny.authenticatedUserId ?? reqAny.user?.claims?.sub;
+
+    if (!userId) {
+      ws.close(1008, "Unauthorized");
+      return;
+    }
+
+    // Close any existing connection for this user to prevent hijacking
+    const existingClient = clients.get(userId);
+    if (existingClient && existingClient.ws !== ws) {
+      existingClient.ws.terminate();
+      clients.delete(userId);
+    }
+
+    console.log(`WebSocket client connected: ${userId}`);
+
+    const clientEntry: WSClient = {
+      ws,
+      userId,
+      onlineStatus: "online",
+      lastSeen: new Date(),
+    };
+    clients.set(userId, clientEntry);
+
+    // Broadcast user online status
+    broadcastUserStatus(userId, "online");
+
+    // Send current online users list
+    const onlineUsers = Array.from(clients.values())
+      .filter((client) => client.onlineStatus === "online")
+      .map((client) => client.userId);
+    ws.send(
+      JSON.stringify({
+        type: "online_users",
+        users: onlineUsers,
+      })
+    );
 
     ws.on("message", async (data: Buffer) => {
       try {
         const message = JSON.parse(data.toString());
 
-        // Handle authentication
+        // Optional legacy auth confirmation
         if (message.type === "auth") {
-          clients.set(message.userId, { 
-            ws, 
-            userId: message.userId,
-            onlineStatus: "online",
-            lastSeen: new Date(),
-          });
-          console.log(`User ${message.userId} authenticated via WebSocket`);
-          
-          // Broadcast user online status
-          broadcastUserStatus(message.userId, "online");
-          
-          // Send current online users to the newly connected user
-          const onlineUsers = Array.from(clients.entries())
-            .filter(([_, client]) => client.onlineStatus === "online")
-            .map(([userId, _]) => userId);
-          
-          ws.send(JSON.stringify({
-            type: "online_users",
-            users: onlineUsers,
-          }));
-          
+          if (message.userId && message.userId !== userId) {
+            ws.send(
+              JSON.stringify({
+                type: "error",
+                message: "User ID mismatch",
+              })
+            );
+            return;
+          }
+
+          ws.send(
+            JSON.stringify({
+              type: "auth_confirmed",
+              userId,
+            })
+          );
           return;
         }
 
-        // Get authenticated user
-        const senderId = Array.from(clients.entries()).find(
-          ([_, client]) => client.ws === ws
-        )?.[0];
-
-        if (!senderId) {
-          ws.send(JSON.stringify({ type: "error", message: "Not authenticated" }));
-          return;
-        }
+        const senderId = userId;
 
         // Handle typing indicator
         if (message.type === "typing") {
@@ -1244,7 +1364,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
             // Update typing state
             client.typingTo = message.receiverId;
-            
+
             // Broadcast typing indicator
             broadcastTypingIndicator(senderId, message.receiverId, true);
 
@@ -1362,7 +1482,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
           // Create message attachments if any
           let messageAttachments: any[] = [];
-          if (message.attachments && Array.isArray(message.attachments) && message.attachments.length > 0) {
+          if (
+            message.attachments &&
+            Array.isArray(message.attachments) &&
+            message.attachments.length > 0
+          ) {
             for (const attachment of message.attachments) {
               const createdAttachment = await storage.createMessageAttachment({
                 messageId: newMessage.id,
@@ -1430,26 +1554,19 @@ export async function registerRoutes(app: Express): Promise<Server> {
     });
 
     ws.on("close", () => {
-      // Remove client from map and broadcast offline status
-      for (const [userId, client] of Array.from(clients.entries())) {
-        if (client.ws === ws) {
-          // Clear any typing timeouts
-          if (client.typingTimeout) {
-            clearTimeout(client.typingTimeout);
-          }
-          
-          // Update status to offline
-          client.onlineStatus = "offline";
-          client.lastSeen = new Date();
-          
-          // Broadcast offline status
-          broadcastUserStatus(userId, "offline");
-          
-          // Remove client from map
-          clients.delete(userId);
-          console.log(`User ${userId} disconnected`);
-          break;
+      const client = clients.get(userId);
+      if (client && client.ws === ws) {
+        if (client.typingTimeout) {
+          clearTimeout(client.typingTimeout);
         }
+
+        client.onlineStatus = "offline";
+        client.lastSeen = new Date();
+
+        broadcastUserStatus(userId, "offline");
+
+        clients.delete(userId);
+        console.log(`User ${userId} disconnected`);
       }
     });
   });

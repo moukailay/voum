@@ -358,11 +358,11 @@ export default function Messages() {
 
     for (const file of files.slice(0, remainingSlots)) {
       if (!allowedTypes.includes(file.type)) {
-        errors.push(`"${file.name}" : type non autorisé`);
+        errors.push(`${file.name} : Type de fichier non autorisé`);
         continue;
       }
       if (file.size > maxFileSize) {
-        errors.push(`"${file.name}" : taille maximale 5 MB dépassée`);
+        errors.push(`${file.name} : Taille maximale (5 MB) dépassée`);
         continue;
       }
       validFiles.push(file);
@@ -370,8 +370,8 @@ export default function Messages() {
 
     if (errors.length > 0) {
       toast({
-        title: "Erreur de fichier",
-        description: errors.join("\n"),
+        title: errors.length === 1 ? "Erreur de fichier" : "Erreurs de fichiers",
+        description: errors.join(" • "),
         variant: "destructive",
       });
     }
@@ -831,23 +831,29 @@ export default function Messages() {
                 >
                   {/* Drag and drop overlay - only visible during drag */}
                   {isDraggingOver && (
-                    <div className="absolute inset-0 z-50 bg-primary/10 backdrop-blur-sm border-2 border-dashed border-primary rounded-lg flex items-center justify-center">
+                    <div 
+                      className="absolute inset-0 z-50 bg-primary/10 backdrop-blur-sm border-2 border-dashed border-primary rounded-lg flex items-center justify-center"
+                      role="status"
+                      aria-live="polite"
+                      aria-label="Zone de dépôt de fichiers active"
+                    >
                       <div className="text-center p-6">
-                        <Paperclip className="h-12 w-12 mx-auto mb-3 text-primary" />
-                        <p className="text-base font-medium text-primary">Déposez vos fichiers ici</p>
-                        <p className="text-sm text-muted-foreground mt-1">JPG, PNG, PDF - Max 5 MB</p>
+                        <Paperclip className="h-12 w-12 mx-auto mb-3 text-primary" aria-hidden="true" />
+                        <p className="text-base md:text-lg font-medium text-primary">Déposez vos fichiers ici</p>
+                        <p className="text-sm md:text-base text-muted-foreground mt-1">JPG, PNG, PDF - Max 5 MB</p>
                       </div>
                     </div>
                   )}
                   {/* Attached files preview */}
                   {attachedFiles.length > 0 && (
-                    <div className="p-3 border-b border-card-border">
-                      <div className="flex flex-wrap gap-2">
+                    <div className="p-3 border-b border-card-border" role="region" aria-label="Fichiers attachés">
+                      <div className="flex flex-wrap gap-2" role="list">
                         {attachedFiles.map((file) => (
                           <div
                             key={file.id}
                             className="relative group rounded-md border border-card-border p-2 flex items-center gap-2 bg-card max-w-full"
                             data-testid={`preview-file-${file.id}`}
+                            role="listitem"
                           >
                             {file.type.startsWith("image/") ? (
                               <ImageIcon className="h-4 w-4 text-muted-foreground shrink-0" />
@@ -884,8 +890,8 @@ export default function Messages() {
                   )}
                   
                   {/* Compose bar */}
-                  <div className="p-3">
-                    <div className="flex gap-2 items-end">
+                  <div className="p-3 md:p-4" role="form" aria-label="Composer un message">
+                    <div className="flex gap-2 md:gap-3 items-end">
                       {/* Hidden file input - Never gets focus automatically */}
                       <input
                         ref={fileInputRef}
@@ -904,7 +910,7 @@ export default function Messages() {
                         type="button"
                         variant="ghost"
                         size="icon"
-                        className="min-h-[44px] min-w-[44px] shrink-0"
+                        className="min-h-[44px] min-w-[44px] md:min-h-[48px] md:min-w-[48px] shrink-0 focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2"
                         disabled={attachedFiles.length >= 3}
                         onClick={(e) => {
                           e.preventDefault();
@@ -914,11 +920,13 @@ export default function Messages() {
                           // Prevent focus from leaving the text input
                           e.preventDefault();
                         }}
-                        aria-label="Joindre un fichier"
+                        aria-label={attachedFiles.length >= 3 ? "Limite de fichiers atteinte (3 maximum)" : "Joindre un fichier (JPG, PNG ou PDF, max 5 MB)"}
+                        aria-disabled={attachedFiles.length >= 3}
                         data-testid="button-attach-file"
                         tabIndex={0}
+                        title={attachedFiles.length >= 3 ? "Limite de 3 fichiers atteinte" : "Joindre un fichier"}
                       >
-                        <Paperclip className="h-5 w-5" />
+                        <Paperclip className="h-5 w-5" aria-hidden="true" />
                       </Button>
                       
                       {/* Message input */}
@@ -947,22 +955,36 @@ export default function Messages() {
                               }
                             }}
                             className={cn(
-                              "min-h-[44px] max-h-[120px] resize-none text-base",
+                              "min-h-[44px] md:min-h-[48px] max-h-[120px] resize-none text-base md:text-base",
+                              "focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2",
                               isMessageTooLong && "border-destructive focus-visible:ring-destructive"
                             )}
                             rows={1}
                             autoFocus
+                            aria-label="Champ de saisie du message"
+                            aria-invalid={isMessageTooLong}
+                            aria-describedby={isMessageTooLong ? "message-error" : "message-counter"}
                             data-testid="input-message"
                           />
-                          <div className={cn(
-                            "absolute bottom-2 right-2 text-xs pointer-events-none",
-                            isMessageTooLong ? "text-destructive font-semibold" : "text-muted-foreground"
-                          )}>
+                          <div 
+                            id="message-counter"
+                            className={cn(
+                              "absolute bottom-2 right-2 text-xs md:text-sm pointer-events-none",
+                              isMessageTooLong ? "text-destructive font-semibold" : "text-muted-foreground"
+                            )}
+                            aria-live="polite"
+                          >
                             {messageInput.length}/{MAX_MESSAGE_LENGTH}
                           </div>
                         </div>
                         {isMessageTooLong && (
-                          <p className="text-xs text-destructive mt-1" role="alert" data-testid="text-error-message-too-long">
+                          <p 
+                            id="message-error"
+                            className="text-xs md:text-sm text-destructive mt-1 font-medium" 
+                            role="alert" 
+                            aria-live="assertive"
+                            data-testid="text-error-message-too-long"
+                          >
                             Votre message est trop long. Maximum {MAX_MESSAGE_LENGTH} caractères.
                           </p>
                         )}
@@ -970,15 +992,17 @@ export default function Messages() {
                       
                       {/* Send button */}
                       <Button
-                        type="button"
+                        type="submit"
                         size="icon"
                         onClick={sendMessage}
                         disabled={!isMessageValid}
-                        className="min-h-[44px] min-w-[44px] shrink-0"
-                        aria-label="Envoyer le message"
+                        className="min-h-[44px] min-w-[44px] md:min-h-[48px] md:min-w-[48px] shrink-0 focus-visible:ring-2 focus-visible:ring-primary focus-visible:ring-offset-2"
+                        aria-label={!isMessageValid ? "Veuillez saisir un message ou joindre un fichier" : "Envoyer le message"}
+                        aria-disabled={!isMessageValid}
                         data-testid="button-send-message"
+                        title="Envoyer (Entrée)"
                       >
-                        <Send className="h-5 w-5" />
+                        <Send className="h-5 w-5" aria-hidden="true" />
                       </Button>
                     </div>
                   </div>

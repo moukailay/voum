@@ -1,8 +1,10 @@
-import type { Express } from "express";
-import { createServer, type Server } from "http";
+import type { Express, Response } from "express";
+import { createServer } from "http";
+import type { Server, IncomingMessage } from "http";
+import type { Duplex } from "stream";
 import { WebSocketServer, WebSocket } from "ws";
 import { storage } from "./storage";
-import { setupAuth, isAuthenticated } from "./replitAuth";
+import { setupAuth, isAuthenticated, getSessionMiddleware } from "./replitAuth";
 import {
   insertTripSchema,
   insertBookingSchema,
@@ -53,6 +55,15 @@ interface WSClient {
 
 const clients = new Map<string, WSClient>();
 
+type AuthenticatedWebSocketRequest = IncomingMessage & {
+  session?: {
+    passport?: {
+      user?: any;
+    };
+  };
+  user?: any;
+};
+
 // Helper function to broadcast user status to relevant clients
 function broadcastUserStatus(userId: string, status: "online" | "offline") {
   const statusMessage = {
@@ -88,6 +99,22 @@ function broadcastTypingIndicator(senderId: string, receiverId: string, isTyping
 export async function registerRoutes(app: Express): Promise<Server> {
   // Setup authentication
   await setupAuth(app);
+
+  const sessionMiddleware = getSessionMiddleware();
+  const allowedWebSocketOrigins = (process.env.REPLIT_DOMAINS ?? "")
+    .split(",")
+    .map((domain) => domain.trim())
+    .filter((domain) => domain.length > 0)
+    .map((domain) => `https://${domain}`);
+
+  if (process.env.NODE_ENV !== "production") {
+    allowedWebSocketOrigins.push(
+      "http://localhost:5173",
+      "http://127.0.0.1:5173",
+      "https://localhost:5173",
+      "https://127.0.0.1:5173"
+    );
+  }
 
   // ==================== Auth Routes ====================
   app.get("/api/auth/user", isAuthenticated, async (req: any, res) => {
@@ -1188,10 +1215,100 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // ==================== WebSocket Server ====================
   const httpServer = createServer(app);
-  const wss = new WebSocketServer({ server: httpServer, path: "/ws" });
+  const wss = new WebSocketServer({ noServer: true });
 
-  wss.on("connection", (ws: WebSocket) => {
+  function rejectSocket(socket: Duplex, statusCode: number, statusText: string) {
+    try {
+      socket.write(
+        `HTTP/1.1 ${statusCode} ${statusText}\r\nConnection: close\r\n\r\n`
+      );
+    } catch (error) {
+      console.error("Failed to send WebSocket rejection response:", error);
+    } finally {
+      socket.destroy();
+    }
+  }
+
+  httpServer.on("upgrade", (request, socket: Duplex, head) => {
+    let pathname = "";
+    try {
+      const host = request.headers.host ?? "localhost";
+      const requestUrl = new URL(request.url ?? "", `http://${host}`);
+      pathname = requestUrl.pathname;
+    } catch (error) {
+      console.error("Invalid WebSocket upgrade URL:", error);
+      rejectSocket(socket, 400, "Bad Request");
+      return;
+    }
+
+    if (pathname !== "/ws") {
+      socket.destroy();
+      return;
+    }
+
+    const origin = request.headers.origin;
+    if (
+      origin &&
+      allowedWebSocketOrigins.length > 0 &&
+      !allowedWebSocketOrigins.includes(origin)
+    ) {
+      console.warn("Blocked WebSocket connection from disallowed origin:", origin);
+      rejectSocket(socket, 403, "Forbidden");
+      return;
+    }
+
+    const fakeResponse = {
+      getHeader: () => undefined,
+      setHeader: () => undefined,
+      removeHeader: () => undefined,
+      writeHead: () => fakeResponse,
+      end: () => undefined,
+      headersSent: false,
+    };
+
+    sessionMiddleware(
+      request as any,
+      fakeResponse as unknown as Response,
+      (err: unknown) => {
+        if (err) {
+          console.error("Session parsing failed during WebSocket upgrade:", err);
+          rejectSocket(socket, 500, "Internal Server Error");
+          return;
+        }
+
+        const authedRequest = request as AuthenticatedWebSocketRequest;
+        const passportUser = authedRequest.session?.passport?.user;
+        if (!passportUser) {
+          rejectSocket(socket, 401, "Unauthorized");
+          return;
+        }
+
+        const now = Math.floor(Date.now() / 1000);
+        if (!passportUser.expires_at || now > passportUser.expires_at) {
+          rejectSocket(socket, 401, "Unauthorized");
+          return;
+        }
+
+        authedRequest.user = passportUser;
+
+        wss.handleUpgrade(request, socket, head, (ws) => {
+          wss.emit("connection", ws, request);
+        });
+      }
+    );
+  });
+
+  wss.on("connection", (ws: WebSocket, request: IncomingMessage) => {
     console.log("WebSocket client connected");
+
+    const authedRequest = request as AuthenticatedWebSocketRequest;
+    const sessionUser = authedRequest.user;
+    const sessionUserId: string | undefined = sessionUser?.claims?.sub;
+
+    if (!sessionUserId) {
+      ws.close(4401, "Unauthorized");
+      return;
+    }
 
     ws.on("message", async (data: Buffer) => {
       try {
@@ -1199,27 +1316,63 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
         // Handle authentication
         if (message.type === "auth") {
-          clients.set(message.userId, { 
-            ws, 
-            userId: message.userId,
+          if (typeof message.userId !== "string") {
+            ws.send(
+              JSON.stringify({
+                type: "error",
+                message: "Invalid authentication payload",
+              })
+            );
+            ws.close(4403, "Invalid auth payload");
+            return;
+          }
+
+          if (message.userId !== sessionUserId) {
+            ws.send(
+              JSON.stringify({
+                type: "error",
+                message: "Authentication mismatch",
+              })
+            );
+            ws.close(4403, "Authentication mismatch");
+            return;
+          }
+
+          const existingClient = clients.get(sessionUserId);
+          if (existingClient && existingClient.ws !== ws) {
+            existingClient.ws.close(4400, "Session superseded");
+          }
+
+          clients.set(sessionUserId, {
+            ws,
+            userId: sessionUserId,
             onlineStatus: "online",
             lastSeen: new Date(),
           });
-          console.log(`User ${message.userId} authenticated via WebSocket`);
-          
+          console.log(`User ${sessionUserId} authenticated via WebSocket`);
+
+          ws.send(
+            JSON.stringify({
+              type: "authenticated",
+              userId: sessionUserId,
+            })
+          );
+
           // Broadcast user online status
-          broadcastUserStatus(message.userId, "online");
-          
+          broadcastUserStatus(sessionUserId, "online");
+
           // Send current online users to the newly connected user
           const onlineUsers = Array.from(clients.entries())
             .filter(([_, client]) => client.onlineStatus === "online")
-            .map(([userId, _]) => userId);
-          
-          ws.send(JSON.stringify({
-            type: "online_users",
-            users: onlineUsers,
-          }));
-          
+            .map(([userId]) => userId);
+
+          ws.send(
+            JSON.stringify({
+              type: "online_users",
+              users: onlineUsers,
+            })
+          );
+
           return;
         }
 
@@ -1229,7 +1382,9 @@ export async function registerRoutes(app: Express): Promise<Server> {
         )?.[0];
 
         if (!senderId) {
-          ws.send(JSON.stringify({ type: "error", message: "Not authenticated" }));
+          ws.send(
+            JSON.stringify({ type: "error", message: "Not authenticated" })
+          );
           return;
         }
 

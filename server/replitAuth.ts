@@ -44,6 +44,12 @@ export function getSession() {
   });
 }
 
+const sessionMiddleware = getSession();
+
+export function getSessionMiddleware() {
+  return sessionMiddleware;
+}
+
 function updateUserSession(
   user: any,
   tokens: client.TokenEndpointResponse & client.TokenEndpointResponseHelpers
@@ -66,7 +72,7 @@ async function upsertUser(claims: any) {
 
 export async function setupAuth(app: Express) {
   app.set("trust proxy", 1);
-  app.use(getSession());
+  app.use(sessionMiddleware);
   app.use(passport.initialize());
   app.use(passport.session());
 

@@ -1,7 +1,7 @@
-import { useState, useEffect, useRef, type ChangeEvent } from "react";
+import { useState, useEffect, useRef, type ChangeEvent, type DragEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useLocation } from "wouter";
-import { Send, MessageCircle, Star, ArrowLeft, Paperclip, ChevronDown, ChevronUp, MapPin, Calendar, Weight, X, FileText, Image as ImageIcon } from "lucide-react";
+import { Send, MessageCircle, Star, ArrowLeft, Paperclip, ChevronDown, ChevronUp, MapPin, Calendar, Weight, X, FileText, Image as ImageIcon, Loader2 } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
@@ -62,6 +62,29 @@ export default function Messages() {
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const typingCleanupIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const pendingMessagesRef = useRef<Map<string, boolean>>(new Map());
+  const messageInputRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const dragCounterRef = useRef(0);
+  const uploadsInProgressRef = useRef(0);
+  const [isDragActive, setIsDragActive] = useState(false);
+  const [liveRegionMessage, setLiveRegionMessage] = useState("");
+  const [isSending, setIsSending] = useState(false);
+  const [pendingUploads, setPendingUploads] = useState(0);
+
+  const announce = (message: string) => {
+    setLiveRegionMessage((prev) => (prev === message ? `${message} ` : message));
+  };
+
+  const dragEventHasFiles = (event: DragEvent<HTMLDivElement>) => {
+    const { dataTransfer } = event;
+    if (!dataTransfer) {
+      return false;
+    }
+    if (dataTransfer.items && dataTransfer.items.length > 0) {
+      return Array.from(dataTransfer.items).some((item) => item.kind === "file");
+    }
+    return Array.from(dataTransfer.types || []).includes("Files");
+  };
 
   // Fetch conversations list
   const { data: conversations } = useQuery<Conversation[]>({
@@ -112,7 +135,22 @@ export default function Messages() {
 
     socket.onmessage = (event) => {
       const data = JSON.parse(event.data);
-      
+
+      if (data.type === "error") {
+        const clientMsgId = data.clientMessageId;
+        if (clientMsgId && pendingMessagesRef.current.has(clientMsgId)) {
+          pendingMessagesRef.current.delete(clientMsgId);
+          setMessages((prev) => prev.filter((msg) => msg.id !== clientMsgId));
+        }
+        setIsSending(false);
+        toast({
+          title: "Erreur",
+          description: data.message || "Impossible d'envoyer le message.",
+          variant: "destructive",
+        });
+        return;
+      }
+
       // Handle new messages
       if (data.type === "message") {
         setMessages((prev) => {
@@ -146,6 +184,8 @@ export default function Messages() {
           }
           return updated;
         });
+        setIsSending(false);
+        messageInputRef.current?.focus();
       }
 
       // Handle message delivered confirmation
@@ -280,6 +320,8 @@ export default function Messages() {
   const sendMessage = () => {
     if (!isMessageValid || !selectedConversation || !wsRef.current) return;
 
+    setIsSending(true);
+
     const tempId = `temp-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
     const tempMessage: MessageWithUsers = {
       id: tempId,
@@ -306,13 +348,33 @@ export default function Messages() {
       receiverId: selectedConversation,
       content: messageInput.trim() || "(Fichier joint)",
       clientMessageId: tempId,
-      attachments: attachedFiles.map(f => ({ url: f.url, name: f.name, type: f.type, size: f.size })),
+      attachments: attachedFiles.map((f) => ({
+        url: f.url,
+        name: f.name,
+        type: f.type,
+        size: f.size,
+      })),
     };
 
-    wsRef.current.send(JSON.stringify(messageData));
+    try {
+      wsRef.current.send(JSON.stringify(messageData));
+    } catch (error) {
+      console.error("WebSocket send error:", error);
+      setMessages((prev) => prev.filter((msg) => msg.id !== tempId));
+      pendingMessagesRef.current.delete(tempId);
+      setIsSending(false);
+      toast({
+        title: "Erreur",
+        description: "Impossible d'envoyer le message. Réessayez.",
+        variant: "destructive",
+      });
+      return;
+    }
+
     setMessageInput("");
     setAttachedFiles([]);
     setIsTyping(false);
+    messageInputRef.current?.focus();
 
     if (typingTimeoutRef.current) {
       clearTimeout(typingTimeoutRef.current);
@@ -321,34 +383,40 @@ export default function Messages() {
 
   // Remove attached file
   const removeAttachedFile = (fileId: string) => {
+    const fileToRemove = attachedFiles.find((f) => f.id === fileId);
     setAttachedFiles((prev) => prev.filter((f) => f.id !== fileId));
+    if (fileToRemove) {
+      announce(`Fichier retiré : ${fileToRemove.name}`);
+    }
+    messageInputRef.current?.focus();
   };
 
-  // Handle file input change (native input without modal)
-  const handleFileInputChange = async (e: ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files || []);
-    
-    if (files.length === 0) return;
-    
-    // Calculate remaining slots
-    const remainingSlots = 3 - attachedFiles.length;
+  const processFiles = async (incomingFiles: File[]) => {
+    if (incomingFiles.length === 0) {
+      return;
+    }
+
+    const totalUsedSlots = attachedFiles.length + uploadsInProgressRef.current;
+    const remainingSlots = 3 - totalUsedSlots;
+
     if (remainingSlots <= 0) {
       toast({
         title: "Limite atteinte",
         description: "Vous ne pouvez joindre que 3 fichiers maximum",
         variant: "destructive",
       });
-      e.target.value = ""; // Reset input
+      announce("Limite de 3 fichiers atteinte");
       return;
     }
 
-    // Validate and filter files
     const maxFileSize = 5 * 1024 * 1024; // 5MB
     const allowedTypes = ["image/jpeg", "image/jpg", "image/png", "application/pdf"];
     const validFiles: File[] = [];
     const errors: string[] = [];
 
-    for (const file of files.slice(0, remainingSlots)) {
+    const filesToProcess = incomingFiles.slice(0, remainingSlots);
+
+    for (const file of filesToProcess) {
       if (!allowedTypes.includes(file.type)) {
         errors.push(`"${file.name}" : type non autorisé`);
         continue;
@@ -361,22 +429,25 @@ export default function Messages() {
     }
 
     if (errors.length > 0) {
+      const errorMessage = errors.join("\n");
       toast({
         title: "Erreur de fichier",
-        description: errors.join("\n"),
+        description: errorMessage,
         variant: "destructive",
       });
+      announce(`Erreur de fichier : ${errors[0]}`);
     }
 
     if (validFiles.length === 0) {
-      e.target.value = ""; // Reset input
       return;
     }
 
-    // Upload files
+    uploadsInProgressRef.current += validFiles.length;
+    setPendingUploads(uploadsInProgressRef.current);
+    announce("Téléversement en cours…");
+
     try {
       const uploadPromises = validFiles.map(async (file) => {
-        // Get presigned URL
         const urlResponse = await fetch("/api/object-storage/presigned-url", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -389,7 +460,6 @@ export default function Messages() {
 
         const { url } = await urlResponse.json();
 
-        // Upload file
         const uploadResponse = await fetch(url, {
           method: "PUT",
           body: file,
@@ -402,7 +472,6 @@ export default function Messages() {
           throw new Error(`Échec du téléversement de ${file.name}`);
         }
 
-        // Extract public URL (remove query params from presigned URL)
         const publicUrl = url.split("?")[0];
 
         return {
@@ -416,12 +485,18 @@ export default function Messages() {
       });
 
       const uploadedFiles = await Promise.all(uploadPromises);
-      setAttachedFiles((prev) => [...prev, ...uploadedFiles]);
-
-      toast({
-        title: "Succès",
-        description: `${uploadedFiles.length} fichier(s) joint(s)`,
-      });
+      if (uploadedFiles.length > 0) {
+        setAttachedFiles((prev) => [...prev, ...uploadedFiles]);
+        toast({
+          title: "Succès",
+          description: `${uploadedFiles.length} fichier(s) joint(s)`,
+        });
+        const successMessage =
+          uploadedFiles.length === 1
+            ? `Fichier ajouté : ${uploadedFiles[0].name}`
+            : `${uploadedFiles.length} fichiers ajoutés`;
+        announce(successMessage);
+      }
     } catch (error) {
       console.error("Upload error:", error);
       toast({
@@ -429,9 +504,74 @@ export default function Messages() {
         description: error instanceof Error ? error.message : "Échec du téléversement",
         variant: "destructive",
       });
+      announce("Erreur de téléversement");
     } finally {
-      e.target.value = ""; // Reset input for next use
+      uploadsInProgressRef.current = Math.max(
+        0,
+        uploadsInProgressRef.current - validFiles.length
+      );
+      setPendingUploads(uploadsInProgressRef.current);
     }
+  };
+
+  // Handle file input change (native input without modal)
+  const handleFileInputChange = async (e: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    await processFiles(files);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    } else {
+      e.target.value = "";
+    }
+    messageInputRef.current?.focus();
+  };
+
+  const handleDragEnter = (event: DragEvent<HTMLDivElement>) => {
+    if (!dragEventHasFiles(event)) {
+      return;
+    }
+    event.preventDefault();
+    dragCounterRef.current += 1;
+    setIsDragActive(true);
+  };
+
+  const handleDragOver = (event: DragEvent<HTMLDivElement>) => {
+    if (!dragEventHasFiles(event)) {
+      return;
+    }
+    event.preventDefault();
+    if (event.dataTransfer) {
+      event.dataTransfer.dropEffect = "copy";
+    }
+  };
+
+  const handleDragLeave = (event: DragEvent<HTMLDivElement>) => {
+    if (!dragEventHasFiles(event)) {
+      return;
+    }
+    event.preventDefault();
+    dragCounterRef.current = Math.max(0, dragCounterRef.current - 1);
+    if (dragCounterRef.current === 0) {
+      setIsDragActive(false);
+    }
+  };
+
+  const handleDrop = async (event: DragEvent<HTMLDivElement>) => {
+    if (!dragEventHasFiles(event)) {
+      return;
+    }
+    event.preventDefault();
+    const files = Array.from(event.dataTransfer?.files || []);
+    dragCounterRef.current = 0;
+    setIsDragActive(false);
+    if (files.length === 0) {
+      return;
+    }
+    await processFiles(files);
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+    messageInputRef.current?.focus();
   };
 
   // Send read receipt when messages are viewed
@@ -813,85 +953,132 @@ export default function Messages() {
                     </div>
                   )}
                   
-                  {/* Compose bar */}
-                  <div className="p-3">
-                    <div className="flex gap-2 items-end">
-                      {/* Hidden file input - Never gets focus automatically */}
-                      <input
-                        type="file"
-                        id="file-input-hidden"
-                        multiple
-                        accept=".jpg,.jpeg,.png,.pdf"
-                        className="hidden"
-                        onChange={handleFileInputChange}
-                        data-testid="input-file-hidden"
-                      />
-                      
-                      {/* Attach file button */}
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className="min-h-[44px] min-w-[44px] shrink-0"
-                        disabled={attachedFiles.length >= 3}
-                        onClick={() => document.getElementById('file-input-hidden')?.click()}
-                        aria-label="Joindre un fichier"
-                        data-testid="button-attach-file"
+                    {pendingUploads > 0 && (
+                      <div
+                        className="px-3 py-2 text-xs text-muted-foreground"
+                        role="status"
                       >
-                        <Paperclip className="h-5 w-5" />
-                      </Button>
-                      
-                      {/* Message input */}
-                      <div className="flex-1">
-                        <div className="relative">
-                          <Textarea
-                            placeholder="Écrivez un message..."
-                            value={messageInput}
-                            onChange={(e) => {
-                              setMessageInput(e.target.value);
-                              handleTyping();
-                            }}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter" && !e.shiftKey) {
-                                e.preventDefault();
-                                sendMessage();
-                              }
-                            }}
-                            className={cn(
-                              "min-h-[44px] max-h-[120px] resize-none text-base",
-                              isMessageTooLong && "border-destructive focus-visible:ring-destructive"
-                            )}
-                            rows={1}
-                            data-testid="input-message"
-                          />
-                          <div className={cn(
-                            "absolute bottom-2 right-2 text-xs pointer-events-none",
-                            isMessageTooLong ? "text-destructive font-semibold" : "text-muted-foreground"
-                          )}>
-                            {messageInput.length}/{MAX_MESSAGE_LENGTH}
-                          </div>
-                        </div>
-                        {isMessageTooLong && (
-                          <p className="text-xs text-destructive mt-1" role="alert" data-testid="text-error-message-too-long">
-                            Votre message est trop long. Maximum {MAX_MESSAGE_LENGTH} caractères.
-                          </p>
-                        )}
+                        Téléversement de {pendingUploads} fichier(s)… Veuillez patienter.
                       </div>
-                      
-                      {/* Send button */}
-                      <Button
-                        type="button"
-                        size="icon"
-                        onClick={sendMessage}
-                        disabled={!isMessageValid}
-                        className="min-h-[44px] min-w-[44px] shrink-0"
-                        aria-label="Envoyer le message"
-                        data-testid="button-send-message"
-                      >
-                        <Send className="h-5 w-5" />
-                      </Button>
+                    )}
+
+                    {/* Compose bar */}
+                    <div
+                      className="p-3 relative"
+                      onDragEnter={handleDragEnter}
+                      onDragOver={handleDragOver}
+                      onDragLeave={handleDragLeave}
+                      onDrop={handleDrop}
+                    >
+                      <span aria-live="polite" className="sr-only">
+                        {liveRegionMessage}
+                      </span>
+
+                      {isDragActive && (
+                        <div
+                          className="pointer-events-none absolute inset-3 z-10 flex flex-col items-center justify-center rounded-lg border-2 border-dashed border-primary/60 bg-primary/10 text-primary text-sm font-medium"
+                          aria-hidden="true"
+                        >
+                          <Paperclip className="h-6 w-6 mb-1" />
+                          <span>Déposez vos fichiers ici</span>
+                          <span className="text-xs text-muted-foreground mt-1">
+                            JPG, PNG ou PDF · 5 Mo max
+                          </span>
+                        </div>
+                      )}
+
+                      <div className="flex gap-2 items-end relative">
+                        {/* Hidden file input - Never gets focus automatically */}
+                        <input
+                          ref={fileInputRef}
+                          type="file"
+                          multiple
+                          accept=".jpg,.jpeg,.png,.pdf"
+                          className="hidden"
+                          onChange={handleFileInputChange}
+                          data-testid="input-file-hidden"
+                        />
+                        
+                        {/* Attach file button */}
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="min-h-[44px] min-w-[44px] shrink-0"
+                          disabled={attachedFiles.length >= 3 || pendingUploads > 0}
+                          onClick={() => fileInputRef.current?.click()}
+                          aria-label="Joindre un fichier"
+                          data-testid="button-attach-file"
+                        >
+                          <Paperclip className="h-5 w-5" />
+                        </Button>
+                        
+                        {/* Message input */}
+                        <div className="flex-1">
+                          <div className="relative">
+                            <Textarea
+                              ref={messageInputRef}
+                              placeholder="Écrivez un message..."
+                              value={messageInput}
+                              onChange={(e) => {
+                                setMessageInput(e.target.value);
+                                handleTyping();
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter" && !e.shiftKey) {
+                                  e.preventDefault();
+                                  sendMessage();
+                                }
+                              }}
+                              className={cn(
+                                "min-h-[44px] max-h-[120px] resize-none text-base",
+                                isMessageTooLong && "border-destructive focus-visible:ring-destructive"
+                              )}
+                              rows={1}
+                              data-testid="input-message"
+                            />
+                            <div
+                              className={cn(
+                                "absolute bottom-2 right-2 text-xs pointer-events-none",
+                                isMessageTooLong ? "text-destructive font-semibold" : "text-muted-foreground"
+                              )}
+                            >
+                              {messageInput.length}/{MAX_MESSAGE_LENGTH}
+                            </div>
+                          </div>
+                          {isMessageTooLong && (
+                            <p
+                              className="text-xs text-destructive mt-1"
+                              role="alert"
+                              data-testid="text-error-message-too-long"
+                            >
+                              Votre message est trop long. Maximum {MAX_MESSAGE_LENGTH} caractères.
+                            </p>
+                          )}
+                        </div>
+                        
+                        {/* Send button */}
+                        <Button
+                          type="button"
+                          size="icon"
+                          onClick={sendMessage}
+                          disabled={!isMessageValid || isSending || pendingUploads > 0}
+                          className="min-h-[44px] min-w-[44px] shrink-0"
+                          aria-label={
+                            isSending || pendingUploads > 0
+                              ? "Envoi du message en cours"
+                              : "Envoyer le message"
+                          }
+                          data-testid="button-send-message"
+                        >
+                          {isSending || pendingUploads > 0 ? (
+                            <Loader2 className="h-5 w-5 animate-spin" aria-hidden="true" />
+                          ) : (
+                            <Send className="h-5 w-5" />
+                          )}
+                        </Button>
+                      </div>
                     </div>
-                  </div>
                 </div>
               </>
             )}

@@ -22,6 +22,8 @@ const getOidcConfig = memoize(
   { maxAge: 3600 * 1000 }
 );
 
+let sessionStoreInstance: connectPg.PGStore | null = null;
+
 export function getSession() {
   const sessionTtl = 7 * 24 * 60 * 60 * 1000; // 1 week
   const pgStore = connectPg(session);
@@ -31,6 +33,7 @@ export function getSession() {
     ttl: sessionTtl,
     tableName: "sessions",
   });
+  sessionStoreInstance = sessionStore;
   return session({
     secret: process.env.SESSION_SECRET!,
     store: sessionStore,
@@ -42,6 +45,10 @@ export function getSession() {
       maxAge: sessionTtl,
     },
   });
+}
+
+export function getSessionStore() {
+  return sessionStoreInstance;
 }
 
 function updateUserSession(

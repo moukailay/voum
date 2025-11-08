@@ -2,7 +2,7 @@ import type { Express } from "express";
 import { createServer, type Server } from "http";
 import { WebSocketServer, WebSocket } from "ws";
 import { storage } from "./storage";
-import { setupAuth, isAuthenticated } from "./replitAuth";
+import { setupAuth, isAuthenticated, getSessionStore } from "./replitAuth";
 import {
   insertTripSchema,
   insertBookingSchema,
@@ -49,9 +49,21 @@ interface WSClient {
   lastSeen: Date;
   typingTo?: string; // userId of the person they're typing to
   typingTimeout?: NodeJS.Timeout;
+  authenticated: boolean;
+  messageCount: number;
+  lastMessageTime: number;
+  connectedAt: Date;
 }
 
 const clients = new Map<string, WSClient>();
+
+// Security constants
+const MAX_MESSAGE_SIZE = 100 * 1024; // 100 KB
+const MAX_MESSAGES_PER_MINUTE = 60;
+const MAX_CONNECTIONS_PER_USER = 3;
+const AUTH_TIMEOUT = 10000; // 10 seconds to authenticate
+const MAX_CONTENT_LENGTH = 2000; // characters
+const MAX_ATTACHMENTS = 3;
 
 // Helper function to broadcast user status to relevant clients
 function broadcastUserStatus(userId: string, status: "online" | "offline") {
@@ -1188,23 +1200,263 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
   // ==================== WebSocket Server ====================
   const httpServer = createServer(app);
-  const wss = new WebSocketServer({ server: httpServer, path: "/ws" });
+  
+  const wss = new WebSocketServer({ 
+    server: httpServer, 
+    path: "/ws",
+    verifyClient: (info, callback) => {
+      // Extract session cookie from request headers
+      const cookies = info.req.headers.cookie || '';
+      const sessionCookie = cookies.split(';').find((c: string) => 
+        c.trim().startsWith('connect.sid=')
+      );
+      
+      if (!sessionCookie) {
+        callback(false, 401, 'Unauthorized: No session cookie');
+        return;
+      }
+      
+      callback(true);
+    }
+  });
 
-  wss.on("connection", (ws: WebSocket) => {
+  // Helper function to verify WebSocket session
+  async function verifyWebSocketSession(req: any): Promise<{ userId: string } | null> {
+    return new Promise((resolve) => {
+      // Parse session cookie
+      const cookies = req.headers.cookie || '';
+      const sessionCookie = cookies.split(';').find((c: string) => 
+        c.trim().startsWith('connect.sid=')
+      );
+      
+      if (!sessionCookie) {
+        resolve(null);
+        return;
+      }
+      
+      // Extract session ID (handle signed cookies)
+      const sessionIdMatch = sessionCookie.match(/connect\.sid=(?:s%3A)?(.+)/);
+      if (!sessionIdMatch) {
+        resolve(null);
+        return;
+      }
+      
+      let sessionId = sessionIdMatch[1];
+      // Decode URL encoding if present
+      try {
+        sessionId = decodeURIComponent(sessionId);
+      } catch (e) {
+        // If decoding fails, use original
+      }
+      
+      // Remove 's:' prefix if present (signed cookie format)
+      if (sessionId.startsWith('s:')) {
+        sessionId = sessionId.substring(2);
+      }
+      
+      // Get session store
+      const sessionStore = getSessionStore();
+      if (!sessionStore) {
+        resolve(null);
+        return;
+      }
+      
+      sessionStore.get(sessionId, (err: any, session: any) => {
+        if (err || !session || !session.passport || !session.passport.user) {
+          resolve(null);
+          return;
+        }
+        
+        const user = session.passport.user;
+        if (!user || !user.claims || !user.claims.sub) {
+          resolve(null);
+          return;
+        }
+        
+        // Check if session is expired
+        const now = Math.floor(Date.now() / 1000);
+        if (user.expires_at && now > user.expires_at) {
+          resolve(null);
+          return;
+        }
+        
+        resolve({ userId: user.claims.sub });
+      });
+    });
+  }
+
+  // Rate limiting helper
+  function checkRateLimit(client: WSClient): boolean {
+    const now = Date.now();
+    const oneMinuteAgo = now - 60000;
+    
+    // Reset counter if last message was more than a minute ago
+    if (client.lastMessageTime < oneMinuteAgo) {
+      client.messageCount = 0;
+      client.lastMessageTime = now;
+      return true;
+    }
+    
+    if (client.messageCount >= MAX_MESSAGES_PER_MINUTE) {
+      return false;
+    }
+    
+    client.messageCount++;
+    client.lastMessageTime = now;
+    return true;
+  }
+
+  // Message validation schemas
+  const authMessageSchema = z.object({
+    type: z.literal("auth"),
+    userId: z.string().min(1),
+  });
+
+  const typingMessageSchema = z.object({
+    type: z.literal("typing"),
+    receiverId: z.string().min(1),
+  });
+
+  const stopTypingMessageSchema = z.object({
+    type: z.literal("stop_typing"),
+    receiverId: z.string().min(1),
+  });
+
+  const readReceiptMessageSchema = z.object({
+    type: z.literal("read_receipt"),
+    messageId: z.string().min(1),
+    originalSenderId: z.string().min(1),
+  });
+
+  const uploadProgressMessageSchema = z.object({
+    type: z.literal("upload_progress"),
+    receiverId: z.string().min(1),
+    uploadId: z.string().min(1),
+    progress: z.number().min(0).max(100),
+    fileName: z.string().optional(),
+  });
+
+  const sendMessageSchema = z.object({
+    type: z.literal("send_message"),
+    receiverId: z.string().min(1),
+    content: z.string().max(MAX_CONTENT_LENGTH),
+    bookingId: z.string().optional().nullable(),
+    clientMessageId: z.string().optional(),
+    attachments: z.array(z.object({
+      url: z.string().url(),
+      name: z.string().optional(),
+      fileName: z.string().optional(),
+      type: z.string().optional(),
+      fileType: z.string().optional(),
+      size: z.number().optional(),
+      fileSize: z.number().optional(),
+      thumbnailUrl: z.string().url().optional().nullable(),
+    })).max(MAX_ATTACHMENTS).optional(),
+  });
+
+  wss.on("connection", async (ws: WebSocket, req: any) => {
     console.log("WebSocket client connected");
+    
+    // Create unauthenticated client entry
+    const tempId = `temp_${Date.now()}_${Math.random()}`;
+    const client: WSClient = {
+      ws,
+      userId: tempId,
+      onlineStatus: "offline",
+      lastSeen: new Date(),
+      authenticated: false,
+      messageCount: 0,
+      lastMessageTime: Date.now(),
+      connectedAt: new Date(),
+    };
+    
+    // Set authentication timeout
+    const authTimeout = setTimeout(() => {
+      if (!client.authenticated) {
+        ws.close(1008, "Authentication timeout");
+        clients.delete(tempId);
+      }
+    }, AUTH_TIMEOUT);
 
     ws.on("message", async (data: Buffer) => {
       try {
-        const message = JSON.parse(data.toString());
+        // Check message size
+        if (data.length > MAX_MESSAGE_SIZE) {
+          ws.send(JSON.stringify({ 
+            type: "error", 
+            message: "Message too large" 
+          }));
+          ws.close(1009, "Message too large");
+          return;
+        }
+
+        let message: any;
+        try {
+          message = JSON.parse(data.toString());
+        } catch (parseError) {
+          ws.send(JSON.stringify({ 
+            type: "error", 
+            message: "Invalid JSON format" 
+          }));
+          return;
+        }
 
         // Handle authentication
         if (message.type === "auth") {
-          clients.set(message.userId, { 
-            ws, 
-            userId: message.userId,
-            onlineStatus: "online",
-            lastSeen: new Date(),
-          });
+          clearTimeout(authTimeout);
+          
+          // Validate auth message structure
+          const authValidation = authMessageSchema.safeParse(message);
+          if (!authValidation.success) {
+            ws.send(JSON.stringify({ 
+              type: "error", 
+              message: "Invalid authentication message format" 
+            }));
+            ws.close(1008, "Invalid authentication");
+            return;
+          }
+
+          // Verify session
+          const sessionData = await verifyWebSocketSession(req);
+          if (!sessionData) {
+            ws.send(JSON.stringify({ 
+              type: "error", 
+              message: "Invalid or expired session" 
+            }));
+            ws.close(1008, "Unauthorized");
+            return;
+          }
+
+          // Verify userId matches session
+          if (sessionData.userId !== message.userId) {
+            ws.send(JSON.stringify({ 
+              type: "error", 
+              message: "User ID mismatch" 
+            }));
+            ws.close(1008, "Unauthorized");
+            return;
+          }
+
+          // Check for existing connections from same user
+          const existingConnections = Array.from(clients.values())
+            .filter(c => c.userId === message.userId && c.authenticated).length;
+          
+          if (existingConnections >= MAX_CONNECTIONS_PER_USER) {
+            ws.send(JSON.stringify({ 
+              type: "error", 
+              message: "Maximum connections reached" 
+            }));
+            ws.close(1008, "Too many connections");
+            return;
+          }
+
+          // Remove temp entry and add authenticated client
+          clients.delete(tempId);
+          client.userId = message.userId;
+          client.authenticated = true;
+          client.onlineStatus = "online";
+          clients.set(message.userId, client);
+          
           console.log(`User ${message.userId} authenticated via WebSocket`);
           
           // Broadcast user online status
@@ -1212,7 +1464,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           
           // Send current online users to the newly connected user
           const onlineUsers = Array.from(clients.entries())
-            .filter(([_, client]) => client.onlineStatus === "online")
+            .filter(([_, c]) => c.onlineStatus === "online" && c.authenticated)
             .map(([userId, _]) => userId);
           
           ws.send(JSON.stringify({
@@ -1223,18 +1475,37 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return;
         }
 
-        // Get authenticated user
-        const senderId = Array.from(clients.entries()).find(
-          ([_, client]) => client.ws === ws
-        )?.[0];
-
-        if (!senderId) {
-          ws.send(JSON.stringify({ type: "error", message: "Not authenticated" }));
+        // All other messages require authentication
+        if (!client.authenticated) {
+          ws.send(JSON.stringify({ 
+            type: "error", 
+            message: "Not authenticated" 
+          }));
           return;
         }
 
+        // Rate limiting
+        if (!checkRateLimit(client)) {
+          ws.send(JSON.stringify({ 
+            type: "error", 
+            message: "Rate limit exceeded" 
+          }));
+          return;
+        }
+
+        const senderId = client.userId;
+
         // Handle typing indicator
         if (message.type === "typing") {
+          const typingValidation = typingMessageSchema.safeParse(message);
+          if (!typingValidation.success) {
+            ws.send(JSON.stringify({ 
+              type: "error", 
+              message: "Invalid typing message format" 
+            }));
+            return;
+          }
+
           const client = clients.get(senderId);
           if (client) {
             // Clear existing typing timeout
@@ -1261,6 +1532,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
         // Handle stop typing
         if (message.type === "stop_typing") {
+          const stopTypingValidation = stopTypingMessageSchema.safeParse(message);
+          if (!stopTypingValidation.success) {
+            ws.send(JSON.stringify({ 
+              type: "error", 
+              message: "Invalid stop typing message format" 
+            }));
+            return;
+          }
+
           const client = clients.get(senderId);
           if (client) {
             if (client.typingTimeout) {
@@ -1274,6 +1554,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
         // Handle read receipt
         if (message.type === "read_receipt") {
+          const readReceiptValidation = readReceiptMessageSchema.safeParse(message);
+          if (!readReceiptValidation.success) {
+            ws.send(JSON.stringify({ 
+              type: "error", 
+              message: "Invalid read receipt message format" 
+            }));
+            return;
+          }
+
           // Update message as read in database
           // Note: This would need a storage method to update read status
           const receiverClient = clients.get(message.originalSenderId);
@@ -1292,6 +1581,15 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
         // Handle file upload progress
         if (message.type === "upload_progress") {
+          const uploadProgressValidation = uploadProgressMessageSchema.safeParse(message);
+          if (!uploadProgressValidation.success) {
+            ws.send(JSON.stringify({ 
+              type: "error", 
+              message: "Invalid upload progress message format" 
+            }));
+            return;
+          }
+
           const receiverClient = clients.get(message.receiverId);
           if (receiverClient && receiverClient.ws.readyState === WebSocket.OPEN) {
             receiverClient.ws.send(
@@ -1308,6 +1606,16 @@ export async function registerRoutes(app: Express): Promise<Server> {
 
         // Handle sending messages
         if (message.type === "send_message") {
+          // Validate message structure
+          const sendMessageValidation = sendMessageSchema.safeParse(message);
+          if (!sendMessageValidation.success) {
+            ws.send(JSON.stringify({ 
+              type: "error", 
+              message: "Invalid message format",
+              clientMessageId: message.clientMessageId,
+            }));
+            return;
+          }
           // Check if users have blocked each other
           const isBlocked = await storage.isUserBlocked(senderId, message.receiverId);
           if (isBlocked) {
@@ -1423,31 +1731,41 @@ export async function registerRoutes(app: Express): Promise<Server> {
         }
       } catch (error) {
         console.error("WebSocket error:", error);
+        // Don't expose internal error details to client
         ws.send(
           JSON.stringify({ type: "error", message: "Failed to process message" })
         );
       }
     });
 
+    ws.on("error", (error) => {
+      console.error("WebSocket connection error:", error);
+    });
+
     ws.on("close", () => {
+      clearTimeout(authTimeout);
+      
       // Remove client from map and broadcast offline status
-      for (const [userId, client] of Array.from(clients.entries())) {
-        if (client.ws === ws) {
+      for (const [userId, c] of Array.from(clients.entries())) {
+        if (c.ws === ws) {
           // Clear any typing timeouts
-          if (client.typingTimeout) {
-            clearTimeout(client.typingTimeout);
+          if (c.typingTimeout) {
+            clearTimeout(c.typingTimeout);
           }
           
-          // Update status to offline
-          client.onlineStatus = "offline";
-          client.lastSeen = new Date();
-          
-          // Broadcast offline status
-          broadcastUserStatus(userId, "offline");
+          // Update status to offline only if authenticated
+          if (c.authenticated) {
+            c.onlineStatus = "offline";
+            c.lastSeen = new Date();
+            
+            // Broadcast offline status
+            broadcastUserStatus(userId, "offline");
+            
+            console.log(`User ${userId} disconnected`);
+          }
           
           // Remove client from map
           clients.delete(userId);
-          console.log(`User ${userId} disconnected`);
           break;
         }
       }

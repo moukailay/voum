@@ -57,7 +57,11 @@ export default function Messages() {
   const [onlineUsers, setOnlineUsers] = useState<OnlineStatus>({});
   const [isTripDetailsOpen, setIsTripDetailsOpen] = useState(false);
   const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([]);
+  const [isDragOver, setIsDragOver] = useState(false);
+  const [isSending, setIsSending] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const typingCleanupIntervalRef = useRef<NodeJS.Timeout | null>(null);
@@ -111,7 +115,33 @@ export default function Messages() {
     };
 
     socket.onmessage = (event) => {
-      const data = JSON.parse(event.data);
+      let data: any;
+      try {
+        data = JSON.parse(event.data);
+      } catch (error) {
+        console.error("Failed to parse WebSocket message:", error);
+        return;
+      }
+
+      // Handle errors from server
+      if (data.type === "error") {
+        console.error("WebSocket server error:", data.message);
+        if (data.message.includes("authenticated") || data.message.includes("session")) {
+          toast({
+            title: "Erreur d'authentification",
+            description: "Votre session a expiré. Veuillez vous reconnecter.",
+            variant: "destructive",
+          });
+          socket.close();
+        } else if (data.message.includes("Rate limit")) {
+          toast({
+            title: "Trop de messages",
+            description: "Veuillez ralentir votre envoi de messages.",
+            variant: "destructive",
+          });
+        }
+        return;
+      }
       
       // Handle new messages
       if (data.type === "message") {
@@ -204,10 +234,23 @@ export default function Messages() {
 
     socket.onerror = (error) => {
       console.error("WebSocket error:", error);
+      toast({
+        title: "Erreur de connexion",
+        description: "Impossible de se connecter au serveur. Veuillez rafraîchir la page.",
+        variant: "destructive",
+      });
     };
 
-    socket.onclose = () => {
-      console.log("WebSocket disconnected");
+    socket.onclose = (event) => {
+      console.log("WebSocket disconnected", event.code, event.reason);
+      // If closed due to authentication error, show message
+      if (event.code === 1008) {
+        toast({
+          title: "Authentification requise",
+          description: "Votre session a expiré. Veuillez vous reconnecter.",
+          variant: "destructive",
+        });
+      }
     };
 
     wsRef.current = socket;
@@ -277,45 +320,72 @@ export default function Messages() {
   const isMessageTooLong = messageInput.length > MAX_MESSAGE_LENGTH;
   const isMessageValid = (messageInput.trim() || attachedFiles.length > 0) && !isMessageTooLong;
 
-  const sendMessage = () => {
-    if (!isMessageValid || !selectedConversation || !wsRef.current) return;
+  const sendMessage = async () => {
+    if (!isMessageValid || !selectedConversation || !wsRef.current || isSending) return;
 
-    const tempId = `temp-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-    const tempMessage: MessageWithUsers = {
-      id: tempId,
-      senderId: user!.id,
-      receiverId: selectedConversation,
-      content: messageInput.trim() || "(Fichier joint)",
-      status: "sending",
-      createdAt: new Date(),
-      bookingId: null,
-      isRead: false,
-      readAt: null,
-      deliveredAt: null,
-      expiresAt: null,
-    };
+    setIsSending(true);
 
-    // Track pending message for reconciliation
-    pendingMessagesRef.current.set(tempId, true);
+    try {
+      const tempId = `temp-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+      const tempMessage: MessageWithUsers = {
+        id: tempId,
+        senderId: user!.id,
+        receiverId: selectedConversation,
+        content: messageInput.trim() || "(Fichier joint)",
+        status: "sending",
+        createdAt: new Date(),
+        bookingId: null,
+        isRead: false,
+        readAt: null,
+        deliveredAt: null,
+        expiresAt: null,
+      };
 
-    // Add temporary message with "sending" status
-    setMessages((prev) => [...prev, tempMessage]);
+      // Track pending message for reconciliation
+      pendingMessagesRef.current.set(tempId, true);
 
-    const messageData = {
-      type: "send_message",
-      receiverId: selectedConversation,
-      content: messageInput.trim() || "(Fichier joint)",
-      clientMessageId: tempId,
-      attachments: attachedFiles.map(f => ({ url: f.url, name: f.name, type: f.type, size: f.size })),
-    };
+      // Add temporary message with "sending" status
+      setMessages((prev) => [...prev, tempMessage]);
 
-    wsRef.current.send(JSON.stringify(messageData));
-    setMessageInput("");
-    setAttachedFiles([]);
-    setIsTyping(false);
+      const messageData = {
+        type: "send_message",
+        receiverId: selectedConversation,
+        content: messageInput.trim() || "(Fichier joint)",
+        clientMessageId: tempId,
+        attachments: attachedFiles.map(f => ({ 
+          url: f.url, 
+          name: f.name, 
+          fileName: f.name,
+          type: f.type, 
+          fileType: f.type,
+          size: f.size,
+          fileSize: f.size,
+          thumbnailUrl: f.thumbnailUrl 
+        })),
+      };
 
-    if (typingTimeoutRef.current) {
-      clearTimeout(typingTimeoutRef.current);
+      wsRef.current.send(JSON.stringify(messageData));
+      setMessageInput("");
+      setAttachedFiles([]);
+      setIsTyping(false);
+
+      if (typingTimeoutRef.current) {
+        clearTimeout(typingTimeoutRef.current);
+      }
+
+      // Restore focus to textarea after sending
+      setTimeout(() => {
+        textareaRef.current?.focus();
+      }, 0);
+    } catch (error) {
+      console.error("Error sending message:", error);
+      toast({
+        title: "Erreur",
+        description: "Impossible d'envoyer le message. Veuillez réessayer.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsSending(false);
     }
   };
 
@@ -328,17 +398,22 @@ export default function Messages() {
   const handleFileInputChange = async (e: ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
     
-    if (files.length === 0) return;
+    if (files.length === 0) {
+      e.target.value = ""; // Reset input
+      return;
+    }
     
     // Calculate remaining slots
     const remainingSlots = 3 - attachedFiles.length;
     if (remainingSlots <= 0) {
       toast({
         title: "Limite atteinte",
-        description: "Vous ne pouvez joindre que 3 fichiers maximum",
+        description: "Vous pouvez ajouter jusqu'à 3 fichiers.",
         variant: "destructive",
       });
       e.target.value = ""; // Reset input
+      // Restore focus to textarea
+      textareaRef.current?.focus();
       return;
     }
 
@@ -350,11 +425,11 @@ export default function Messages() {
 
     for (const file of files.slice(0, remainingSlots)) {
       if (!allowedTypes.includes(file.type)) {
-        errors.push(`"${file.name}" : type non autorisé`);
+        errors.push(`Type de fichier non autorisé.`);
         continue;
       }
       if (file.size > maxFileSize) {
-        errors.push(`"${file.name}" : taille maximale 5 MB dépassée`);
+        errors.push(`Taille maximale (5 Mo) dépassée.`);
         continue;
       }
       validFiles.push(file);
@@ -363,13 +438,15 @@ export default function Messages() {
     if (errors.length > 0) {
       toast({
         title: "Erreur de fichier",
-        description: errors.join("\n"),
+        description: errors[0], // Show first error only
         variant: "destructive",
       });
     }
 
     if (validFiles.length === 0) {
       e.target.value = ""; // Reset input
+      // Restore focus to textarea
+      textareaRef.current?.focus();
       return;
     }
 
@@ -418,9 +495,12 @@ export default function Messages() {
       const uploadedFiles = await Promise.all(uploadPromises);
       setAttachedFiles((prev) => [...prev, ...uploadedFiles]);
 
+      // Announce via ARIA live region
+      const announcement = `${uploadedFiles.length} fichier(s) ajouté(s)`;
+      
       toast({
         title: "Succès",
-        description: `${uploadedFiles.length} fichier(s) joint(s)`,
+        description: announcement,
       });
     } catch (error) {
       console.error("Upload error:", error);
@@ -431,7 +511,40 @@ export default function Messages() {
       });
     } finally {
       e.target.value = ""; // Reset input for next use
+      // Restore focus to textarea after file selection
+      textareaRef.current?.focus();
     }
+  };
+
+  // Handle drag and drop
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!isDragOver) {
+      setIsDragOver(true);
+    }
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragOver(false);
+  };
+
+  const handleDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDragOver(false);
+
+    const files = Array.from(e.dataTransfer.files);
+    if (files.length === 0) return;
+
+    // Create a synthetic event to reuse file handling logic
+    const syntheticEvent = {
+      target: { files: files, value: "" },
+    } as ChangeEvent<HTMLInputElement>;
+
+    await handleFileInputChange(syntheticEvent);
   };
 
   // Send read receipt when messages are viewed
@@ -773,10 +886,25 @@ export default function Messages() {
                 </div>
 
                 {/* Message Input - Sticky compose bar with 44px+ tap targets */}
-                <div className="border-t border-card-border bg-background sticky bottom-0">
+                <div 
+                  className="border-t border-card-border bg-background sticky bottom-0"
+                  onDragOver={handleDragOver}
+                  onDragLeave={handleDragLeave}
+                  onDrop={handleDrop}
+                >
+                  {/* Drag-over overlay - Only visible during drag */}
+                  {isDragOver && (
+                    <div className="absolute inset-0 bg-primary/10 border-2 border-dashed border-primary rounded-lg flex items-center justify-center z-10 pointer-events-none">
+                      <div className="text-center">
+                        <Paperclip className="h-8 w-8 mx-auto mb-2 text-primary" />
+                        <p className="text-sm font-medium text-primary">Déposez vos fichiers ici</p>
+                      </div>
+                    </div>
+                  )}
+
                   {/* Attached files preview */}
                   {attachedFiles.length > 0 && (
-                    <div className="p-3 border-b border-card-border">
+                    <div className="p-3 border-b border-card-border" role="region" aria-label="Fichiers joints">
                       <div className="flex flex-wrap gap-2">
                         {attachedFiles.map((file) => (
                           <div
@@ -785,9 +913,9 @@ export default function Messages() {
                             data-testid={`preview-file-${file.id}`}
                           >
                             {file.type.startsWith("image/") ? (
-                              <ImageIcon className="h-4 w-4 text-muted-foreground shrink-0" />
+                              <ImageIcon className="h-4 w-4 text-muted-foreground shrink-0" aria-hidden="true" />
                             ) : (
-                              <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
+                              <FileText className="h-4 w-4 text-muted-foreground shrink-0" aria-hidden="true" />
                             )}
                             <div className="flex-1 min-w-0">
                               <p className="text-xs font-medium truncate max-w-[140px]">
@@ -801,11 +929,15 @@ export default function Messages() {
                               variant="ghost"
                               size="icon"
                               className="h-6 w-6 shrink-0"
-                              onClick={() => removeAttachedFile(file.id)}
+                              onClick={() => {
+                                removeAttachedFile(file.id);
+                                // Restore focus to textarea
+                                setTimeout(() => textareaRef.current?.focus(), 0);
+                              }}
                               aria-label={`Retirer ${file.name}`}
                               data-testid={`button-remove-file-${file.id}`}
                             >
-                              <X className="h-3 w-3" />
+                              <X className="h-3 w-3" aria-hidden="true" />
                             </Button>
                           </div>
                         ))}
@@ -814,16 +946,19 @@ export default function Messages() {
                   )}
                   
                   {/* Compose bar */}
-                  <div className="p-3">
-                    <div className="flex gap-2 items-end">
+                  <div className="p-3 md:p-4">
+                    <div className="flex gap-2 md:gap-3 items-end max-w-4xl mx-auto">
                       {/* Hidden file input - Never gets focus automatically */}
                       <input
+                        ref={fileInputRef}
                         type="file"
                         id="file-input-hidden"
                         multiple
                         accept=".jpg,.jpeg,.png,.pdf"
                         className="hidden"
                         onChange={handleFileInputChange}
+                        tabIndex={-1}
+                        aria-hidden="true"
                         data-testid="input-file-hidden"
                       />
                       
@@ -833,19 +968,26 @@ export default function Messages() {
                         variant="ghost"
                         size="icon"
                         className="min-h-[44px] min-w-[44px] shrink-0"
-                        disabled={attachedFiles.length >= 3}
-                        onClick={() => document.getElementById('file-input-hidden')?.click()}
+                        disabled={attachedFiles.length >= 3 || isSending}
+                        onClick={(e) => {
+                          e.preventDefault();
+                          fileInputRef.current?.click();
+                          // Ensure focus returns to textarea
+                          setTimeout(() => textareaRef.current?.focus(), 0);
+                        }}
                         aria-label="Joindre un fichier"
+                        aria-pressed={false}
                         data-testid="button-attach-file"
                       >
-                        <Paperclip className="h-5 w-5" />
+                        <Paperclip className="h-5 w-5" aria-hidden="true" />
                       </Button>
                       
                       {/* Message input */}
-                      <div className="flex-1">
+                      <div className="flex-1 min-w-0">
                         <div className="relative">
                           <Textarea
-                            placeholder="Écrivez un message..."
+                            ref={textareaRef}
+                            placeholder="Écrivez un message…"
                             value={messageInput}
                             onChange={(e) => {
                               setMessageInput(e.target.value);
@@ -858,21 +1000,36 @@ export default function Messages() {
                               }
                             }}
                             className={cn(
-                              "min-h-[44px] max-h-[120px] resize-none text-base",
-                              isMessageTooLong && "border-destructive focus-visible:ring-destructive"
+                              "min-h-[44px] md:min-h-[48px] max-h-[120px] resize-none text-base md:text-[16px]",
+                              "px-3 md:px-4 py-2 md:py-3",
+                              "placeholder:text-muted-foreground/70",
+                              isMessageTooLong && "border-destructive focus-visible:ring-destructive",
+                              "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
                             )}
                             rows={1}
+                            disabled={isSending}
+                            aria-label="Zone de saisie de message"
+                            aria-describedby={isMessageTooLong ? "message-length-error" : "message-length-info"}
                             data-testid="input-message"
                           />
-                          <div className={cn(
-                            "absolute bottom-2 right-2 text-xs pointer-events-none",
-                            isMessageTooLong ? "text-destructive font-semibold" : "text-muted-foreground"
-                          )}>
+                          <div 
+                            id="message-length-info"
+                            className={cn(
+                              "absolute bottom-2 right-2 text-xs pointer-events-none",
+                              isMessageTooLong ? "text-destructive font-semibold" : "text-muted-foreground"
+                            )}
+                            aria-live="polite"
+                          >
                             {messageInput.length}/{MAX_MESSAGE_LENGTH}
                           </div>
                         </div>
                         {isMessageTooLong && (
-                          <p className="text-xs text-destructive mt-1" role="alert" data-testid="text-error-message-too-long">
+                          <p 
+                            id="message-length-error"
+                            className="text-xs text-destructive mt-1 px-1" 
+                            role="alert" 
+                            data-testid="text-error-message-too-long"
+                          >
                             Votre message est trop long. Maximum {MAX_MESSAGE_LENGTH} caractères.
                           </p>
                         )}
@@ -883,12 +1040,17 @@ export default function Messages() {
                         type="button"
                         size="icon"
                         onClick={sendMessage}
-                        disabled={!isMessageValid}
+                        disabled={!isMessageValid || isSending}
                         className="min-h-[44px] min-w-[44px] shrink-0"
-                        aria-label="Envoyer le message"
+                        aria-label={isSending ? "Envoi en cours..." : "Envoyer le message"}
+                        aria-busy={isSending}
                         data-testid="button-send-message"
                       >
-                        <Send className="h-5 w-5" />
+                        {isSending ? (
+                          <div className="h-5 w-5 border-2 border-current border-t-transparent rounded-full animate-spin" aria-hidden="true" />
+                        ) : (
+                          <Send className="h-5 w-5" aria-hidden="true" />
+                        )}
                       </Button>
                     </div>
                   </div>

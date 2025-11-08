@@ -64,9 +64,13 @@ async function upsertUser(claims: any) {
   });
 }
 
-export async function setupAuth(app: Express) {
+export async function setupAuth(
+  app: Express,
+  sessionMiddleware?: ReturnType<typeof getSession>
+) {
   app.set("trust proxy", 1);
-  app.use(getSession());
+  const sessionMw = sessionMiddleware ?? getSession();
+  app.use(sessionMw);
   app.use(passport.initialize());
   app.use(passport.session());
 
@@ -122,32 +126,62 @@ export async function setupAuth(app: Express) {
       );
     });
   });
-}
+  }
 
-export const isAuthenticated: RequestHandler = async (req, res, next) => {
-  const user = req.user as any;
+export async function getAuthenticatedUser(req: any): Promise<any | null> {
+  let user = req.user as any;
 
-  if (!req.isAuthenticated() || !user.expires_at) {
-    return res.status(401).json({ message: "Unauthorized" });
+  if (!user && req.session?.passport?.user) {
+    user = req.session.passport.user;
+    req.user = user;
+  }
+
+  if (!user || !user.expires_at) {
+    return null;
   }
 
   const now = Math.floor(Date.now() / 1000);
   if (now <= user.expires_at) {
-    return next();
+    return user;
   }
 
   const refreshToken = user.refresh_token;
   if (!refreshToken) {
-    res.status(401).json({ message: "Unauthorized" });
-    return;
+    return null;
   }
 
   try {
     const config = await getOidcConfig();
     const tokenResponse = await client.refreshTokenGrant(config, refreshToken);
     updateUserSession(user, tokenResponse);
+
+    if (req.session?.passport) {
+      req.session.passport.user = user;
+      if (typeof req.session.save === "function") {
+        await new Promise<void>((resolve, reject) => {
+          req.session.save((err: unknown) => (err ? reject(err) : resolve()));
+        });
+      }
+    }
+
+    return user;
+  } catch (error) {
+    console.error("Failed to refresh user session:", error);
+    return null;
+  }
+}
+
+export const isAuthenticated: RequestHandler = async (req, res, next) => {
+  try {
+    const user = await getAuthenticatedUser(req);
+    if (!user) {
+      res.status(401).json({ message: "Unauthorized" });
+      return;
+    }
+    req.user = user;
     return next();
   } catch (error) {
+    console.error("Authentication middleware error:", error);
     res.status(401).json({ message: "Unauthorized" });
     return;
   }

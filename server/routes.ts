@@ -1,8 +1,9 @@
 import type { Express } from "express";
-import { createServer, type Server } from "http";
+import { createServer } from "http";
+import type { Server, IncomingMessage } from "http";
 import { WebSocketServer, WebSocket } from "ws";
 import { storage } from "./storage";
-import { setupAuth, isAuthenticated } from "./replitAuth";
+import { setupAuth, isAuthenticated, getSession, getAuthenticatedUser } from "./replitAuth";
 import {
   insertTripSchema,
   insertBookingSchema,
@@ -23,7 +24,55 @@ import { filterContent, shouldBlockContent } from "./contentFilter";
 import { db } from "./db";
 import { eq } from "drizzle-orm";
 import { scheduleAppointmentReminders, cancelBookingReminders } from "./services/reminder-scheduler";
+import type { Session, SessionData } from "express-session";
 import { generateICSFile } from "./services/calendar";
+
+type WebSocketRequest = IncomingMessage & {
+  session?: Session & Partial<SessionData> & {
+    passport?: {
+      user?: any;
+    };
+  };
+  user?: any;
+};
+
+interface AuthenticatedWebSocket extends WebSocket {
+  userId?: string;
+}
+
+const runMiddleware = (
+  req: any,
+  res: any,
+  middleware: (req: any, res: any, next: (err?: unknown) => void) => void
+) =>
+  new Promise<void>((resolve, reject) => {
+    middleware(req, res, (err: unknown) => {
+      if (err) {
+        reject(err);
+      } else {
+        resolve();
+      }
+    });
+  });
+
+function createFakeResponse() {
+  return {
+    getHeader(_name: string) {
+      return undefined;
+    },
+    setHeader(_name: string, _value: string) {
+      return;
+    },
+    writeHead(..._args: unknown[]) {
+      return;
+    },
+    end(..._args: unknown[]) {
+      return;
+    },
+    headersSent: false,
+    statusCode: 200,
+  };
+}
 
 // Create API schemas that accept date strings and coerce numbers
 const createTripSchema = insertTripSchema
@@ -43,7 +92,7 @@ const createTripSchema = insertTripSchema
 
 // WebSocket client tracking
 interface WSClient {
-  ws: WebSocket;
+  ws: AuthenticatedWebSocket;
   userId: string;
   onlineStatus: "online" | "offline";
   lastSeen: Date;
@@ -87,7 +136,8 @@ function broadcastTypingIndicator(senderId: string, receiverId: string, isTyping
 
 export async function registerRoutes(app: Express): Promise<Server> {
   // Setup authentication
-  await setupAuth(app);
+  const sessionMiddleware = getSession();
+  await setupAuth(app, sessionMiddleware);
 
   // ==================== Auth Routes ====================
   app.get("/api/auth/user", isAuthenticated, async (req: any, res) => {
@@ -1190,65 +1240,83 @@ export async function registerRoutes(app: Express): Promise<Server> {
   const httpServer = createServer(app);
   const wss = new WebSocketServer({ server: httpServer, path: "/ws" });
 
-  wss.on("connection", (ws: WebSocket) => {
-    console.log("WebSocket client connected");
+  wss.on("connection", async (ws: WebSocket, request: IncomingMessage) => {
+    const authWs = ws as AuthenticatedWebSocket;
+    const upgradedRequest = request as WebSocketRequest;
+
+    try {
+      const fakeRes = createFakeResponse();
+      await runMiddleware(upgradedRequest, fakeRes, sessionMiddleware);
+      const sessionUser = await getAuthenticatedUser(upgradedRequest);
+      const userId = sessionUser?.claims?.sub;
+
+      if (!sessionUser || !userId) {
+        ws.close(4401, "Unauthorized");
+        return;
+      }
+
+      authWs.userId = userId;
+
+      const existingClient = clients.get(userId);
+      if (existingClient && existingClient.ws !== authWs) {
+        if (existingClient.ws.readyState === WebSocket.OPEN) {
+          existingClient.ws.close(4000, "Session replaced");
+        }
+        clients.delete(userId);
+      }
+
+      clients.set(userId, {
+        ws: authWs,
+        userId,
+        onlineStatus: "online",
+        lastSeen: new Date(),
+      });
+
+      console.log(`WebSocket client connected: ${userId}`);
+      broadcastUserStatus(userId, "online");
+
+      const onlineUsers = Array.from(clients.values())
+        .filter((client) => client.onlineStatus === "online")
+        .map((client) => client.userId);
+
+      authWs.send(
+        JSON.stringify({
+          type: "online_users",
+          users: onlineUsers,
+        })
+      );
+    } catch (error) {
+      console.error("WebSocket authentication error:", error);
+      ws.close(1011, "Internal error");
+      return;
+    }
 
     ws.on("message", async (data: Buffer) => {
+      const senderId = authWs.userId;
+
+      if (!senderId) {
+        ws.send(JSON.stringify({ type: "error", message: "Not authenticated" }));
+        return;
+      }
+
       try {
         const message = JSON.parse(data.toString());
-
-        // Handle authentication
-        if (message.type === "auth") {
-          clients.set(message.userId, { 
-            ws, 
-            userId: message.userId,
-            onlineStatus: "online",
-            lastSeen: new Date(),
-          });
-          console.log(`User ${message.userId} authenticated via WebSocket`);
-          
-          // Broadcast user online status
-          broadcastUserStatus(message.userId, "online");
-          
-          // Send current online users to the newly connected user
-          const onlineUsers = Array.from(clients.entries())
-            .filter(([_, client]) => client.onlineStatus === "online")
-            .map(([userId, _]) => userId);
-          
-          ws.send(JSON.stringify({
-            type: "online_users",
-            users: onlineUsers,
-          }));
-          
-          return;
+        const activeClient = clients.get(senderId);
+        if (activeClient) {
+          activeClient.lastSeen = new Date();
         }
 
-        // Get authenticated user
-        const senderId = Array.from(clients.entries()).find(
-          ([_, client]) => client.ws === ws
-        )?.[0];
-
-        if (!senderId) {
-          ws.send(JSON.stringify({ type: "error", message: "Not authenticated" }));
-          return;
-        }
-
-        // Handle typing indicator
         if (message.type === "typing") {
           const client = clients.get(senderId);
           if (client) {
-            // Clear existing typing timeout
             if (client.typingTimeout) {
               clearTimeout(client.typingTimeout);
             }
 
-            // Update typing state
             client.typingTo = message.receiverId;
-            
-            // Broadcast typing indicator
+
             broadcastTypingIndicator(senderId, message.receiverId, true);
 
-            // Auto-stop typing after 3 seconds of inactivity
             client.typingTimeout = setTimeout(() => {
               if (client.typingTo === message.receiverId) {
                 client.typingTo = undefined;
@@ -1259,7 +1327,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return;
         }
 
-        // Handle stop typing
         if (message.type === "stop_typing") {
           const client = clients.get(senderId);
           if (client) {
@@ -1272,10 +1339,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return;
         }
 
-        // Handle read receipt
         if (message.type === "read_receipt") {
-          // Update message as read in database
-          // Note: This would need a storage method to update read status
           const receiverClient = clients.get(message.originalSenderId);
           if (receiverClient && receiverClient.ws.readyState === WebSocket.OPEN) {
             receiverClient.ws.send(
@@ -1290,7 +1354,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return;
         }
 
-        // Handle file upload progress
         if (message.type === "upload_progress") {
           const receiverClient = clients.get(message.receiverId);
           if (receiverClient && receiverClient.ws.readyState === WebSocket.OPEN) {
@@ -1306,9 +1369,7 @@ export async function registerRoutes(app: Express): Promise<Server> {
           return;
         }
 
-        // Handle sending messages
         if (message.type === "send_message") {
-          // Check if users have blocked each other
           const isBlocked = await storage.isUserBlocked(senderId, message.receiverId);
           if (isBlocked) {
             ws.send(
@@ -1321,7 +1382,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
             return;
           }
 
-          // Content filtering
           const filterResult = filterContent(message.content);
           if (shouldBlockContent(message.content)) {
             ws.send(
@@ -1334,7 +1394,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
             return;
           }
 
-          // Log content filter warning if flagged (but not blocked)
           if (!filterResult.isClean) {
             console.warn(
               `Message from ${senderId} flagged with severity ${filterResult.severity}:`,
@@ -1342,7 +1401,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
             );
           }
 
-          // Stop typing indicator if active
           const client = clients.get(senderId);
           if (client && client.typingTo === message.receiverId) {
             if (client.typingTimeout) {
@@ -1352,7 +1410,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
             broadcastTypingIndicator(senderId, message.receiverId, false);
           }
 
-          // Create message in database
           const newMessage = await storage.createMessage({
             senderId,
             receiverId: message.receiverId,
@@ -1360,7 +1417,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
             bookingId: message.bookingId || null,
           });
 
-          // Create message attachments if any
           let messageAttachments: any[] = [];
           if (message.attachments && Array.isArray(message.attachments) && message.attachments.length > 0) {
             for (const attachment of message.attachments) {
@@ -1376,13 +1432,11 @@ export async function registerRoutes(app: Express): Promise<Server> {
             }
           }
 
-          // Include attachments in message response
           const messageWithAttachments = {
             ...newMessage,
             attachments: messageAttachments,
           };
 
-          // Send delivery confirmation to sender (echo back clientMessageId)
           ws.send(
             JSON.stringify({
               type: "message_sent",
@@ -1392,7 +1446,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
             })
           );
 
-          // Send to receiver if online (with delivered status)
           const receiverClient = clients.get(message.receiverId);
           if (receiverClient && receiverClient.ws.readyState === WebSocket.OPEN) {
             receiverClient.ws.send(
@@ -1402,7 +1455,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
               })
             );
 
-            // Send delivery confirmation back to sender
             ws.send(
               JSON.stringify({
                 type: "message_delivered",
@@ -1412,7 +1464,6 @@ export async function registerRoutes(app: Express): Promise<Server> {
             );
           }
 
-          // Create notification
           await storage.createNotification({
             userId: message.receiverId,
             type: "message",
@@ -1430,27 +1481,26 @@ export async function registerRoutes(app: Express): Promise<Server> {
     });
 
     ws.on("close", () => {
-      // Remove client from map and broadcast offline status
-      for (const [userId, client] of Array.from(clients.entries())) {
-        if (client.ws === ws) {
-          // Clear any typing timeouts
-          if (client.typingTimeout) {
-            clearTimeout(client.typingTimeout);
-          }
-          
-          // Update status to offline
-          client.onlineStatus = "offline";
-          client.lastSeen = new Date();
-          
-          // Broadcast offline status
-          broadcastUserStatus(userId, "offline");
-          
-          // Remove client from map
-          clients.delete(userId);
-          console.log(`User ${userId} disconnected`);
-          break;
-        }
+      const userId = authWs.userId;
+      if (!userId) {
+        return;
       }
+
+      const client = clients.get(userId);
+      if (!client || client.ws !== authWs) {
+        return;
+      }
+
+      if (client.typingTimeout) {
+        clearTimeout(client.typingTimeout);
+      }
+
+      client.onlineStatus = "offline";
+      client.lastSeen = new Date();
+
+      broadcastUserStatus(userId, "offline");
+      clients.delete(userId);
+      console.log(`User ${userId} disconnected`);
     });
   });
 

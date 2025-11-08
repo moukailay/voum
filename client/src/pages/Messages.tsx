@@ -57,6 +57,7 @@ export default function Messages() {
   const [onlineUsers, setOnlineUsers] = useState<OnlineStatus>({});
   const [isTripDetailsOpen, setIsTripDetailsOpen] = useState(false);
   const [attachedFiles, setAttachedFiles] = useState<AttachedFile[]>([]);
+  const [isDraggingOver, setIsDraggingOver] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -334,10 +335,8 @@ export default function Messages() {
     }, 0);
   };
 
-  // Handle file input change (native input without modal)
-  const handleFileInputChange = async (e: ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(e.target.files || []);
-    
+  // Handle file drop
+  const handleFileDrop = async (files: File[]) => {
     if (files.length === 0) return;
     
     // Calculate remaining slots
@@ -348,7 +347,6 @@ export default function Messages() {
         description: "Vous ne pouvez joindre que 3 fichiers maximum",
         variant: "destructive",
       });
-      e.target.value = ""; // Reset input
       return;
     }
 
@@ -379,7 +377,6 @@ export default function Messages() {
     }
 
     if (validFiles.length === 0) {
-      e.target.value = ""; // Reset input
       return;
     }
 
@@ -444,9 +441,46 @@ export default function Messages() {
         description: error instanceof Error ? error.message : "Échec du téléversement",
         variant: "destructive",
       });
-    } finally {
-      e.target.value = ""; // Reset input for next use
     }
+  };
+  
+  // Handle file input change (native input without modal)
+  const handleFileInputChange = async (e: ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    e.target.value = ""; // Reset input
+    await handleFileDrop(files);
+  };
+  
+  // Handle drag and drop events
+  const handleDragEnter = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.dataTransfer.types.includes("Files")) {
+      setIsDraggingOver(true);
+    }
+  };
+  
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    // Only set to false if leaving the drop zone entirely
+    if (e.currentTarget === e.target) {
+      setIsDraggingOver(false);
+    }
+  };
+  
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+  };
+  
+  const handleDropFiles = async (e: React.DragEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDraggingOver(false);
+    
+    const files = Array.from(e.dataTransfer.files);
+    await handleFileDrop(files);
   };
 
   // Send read receipt when messages are viewed
@@ -788,7 +822,23 @@ export default function Messages() {
                 </div>
 
                 {/* Message Input - Sticky compose bar with 44px+ tap targets */}
-                <div className="border-t border-card-border bg-background sticky bottom-0">
+                <div 
+                  className="border-t border-card-border bg-background sticky bottom-0 relative"
+                  onDragEnter={handleDragEnter}
+                  onDragOver={handleDragOver}
+                  onDragLeave={handleDragLeave}
+                  onDrop={handleDropFiles}
+                >
+                  {/* Drag and drop overlay - only visible during drag */}
+                  {isDraggingOver && (
+                    <div className="absolute inset-0 z-50 bg-primary/10 backdrop-blur-sm border-2 border-dashed border-primary rounded-lg flex items-center justify-center">
+                      <div className="text-center p-6">
+                        <Paperclip className="h-12 w-12 mx-auto mb-3 text-primary" />
+                        <p className="text-base font-medium text-primary">Déposez vos fichiers ici</p>
+                        <p className="text-sm text-muted-foreground mt-1">JPG, PNG, PDF - Max 5 MB</p>
+                      </div>
+                    </div>
+                  )}
                   {/* Attached files preview */}
                   {attachedFiles.length > 0 && (
                     <div className="p-3 border-b border-card-border">
